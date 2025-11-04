@@ -57,6 +57,10 @@ const cli = yargs(hideBin(process.argv))
     type: "string",
     choices: ["DEBUG", "INFO", "WARN", "ERROR"],
   })
+  .option("dir", {
+    describe: "directory to run in",
+    type: "string",
+  })
   .middleware(async (opts) => {
     await Log.init({
       print: process.argv.includes("--print-logs"),

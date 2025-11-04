@@ -6,10 +6,10 @@ import { upgrade } from "@/cli/upgrade"
 import { Installation } from "@/installation"
 
 export const TuiSpawnCommand = cmd({
-  command: "spawn [project]",
+  command: "spawn",
   builder: (yargs) =>
     yargs
-      .positional("project", {
+      .option("dir", {
         type: "string",
         describe: "path to start opencode in",
       })
@@ -46,8 +46,8 @@ export const TuiSpawnCommand = cmd({
       "attach",
       server.url.toString(),
       "--dir",
-      args.project
-        ? path.resolve(args.project)
+      args.dir
+        ? path.resolve(args.dir)
         : Installation.isLocal()
           ? path.resolve(process.cwd(), "../..")
           : process.cwd(),

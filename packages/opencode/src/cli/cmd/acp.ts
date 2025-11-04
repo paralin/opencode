@@ -1,3 +1,4 @@
+import path from "path"
 import { Log } from "@/util/log"
 import { bootstrap } from "../bootstrap"
 import { cmd } from "./cmd"
@@ -20,10 +21,9 @@ export const AcpCommand = cmd({
   describe: "start ACP (Agent Client Protocol) server",
   builder: (yargs) => {
     return yargs
-      .option("cwd", {
-        describe: "working directory",
+      .option("dir", {
+        describe: "directory to run in",
         type: "string",
-        default: process.cwd(),
       })
       .option("port", {
         type: "number",
@@ -36,16 +36,18 @@ export const AcpCommand = cmd({
         default: "127.0.0.1",
       })
   },
-  handler: async (args) => {
-    await bootstrap(process.cwd(), async () => {
+  handler: async (opts) => {
+    const cwd = opts.dir ? path.resolve(opts.dir) : process.cwd()
+    await bootstrap(cwd, async () => {
       const server = Server.listen({
-        port: args.port,
-        hostname: args.hostname,
+        port: opts.port,
+        hostname: opts.hostname,
       })
 
       const sdk = createOpencodeClient({
         baseUrl: `http://${server.hostname}:${server.port}`,
       })
+
 
       const input = new WritableStream<Uint8Array>({
         write(chunk) {

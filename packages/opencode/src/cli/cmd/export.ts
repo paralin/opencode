@@ -1,4 +1,5 @@
 import type { Argv } from "yargs"
+import path from "path"
 import { Session } from "../../session"
 import { cmd } from "./cmd"
 import { bootstrap } from "../bootstrap"
@@ -10,13 +11,19 @@ export const ExportCommand = cmd({
   command: "export [sessionID]",
   describe: "export session data as JSON",
   builder: (yargs: Argv) => {
-    return yargs.positional("sessionID", {
-      describe: "session id to export",
-      type: "string",
-    })
+    return yargs
+      .positional("sessionID", {
+        describe: "session id to export",
+        type: "string",
+      })
+      .option("dir", {
+        describe: "directory to run in",
+        type: "string",
+      })
   },
   handler: async (args) => {
-    await bootstrap(process.cwd(), async () => {
+    const cwd = args.dir ? path.resolve(args.dir) : process.cwd()
+    await bootstrap(cwd, async () => {
       let sessionID = args.sessionID
       process.stderr.write(`Exporting session: ${sessionID ?? "latest"}`)
 

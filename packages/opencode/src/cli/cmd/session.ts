@@ -1,4 +1,5 @@
 import type { Argv } from "yargs"
+import path from "path"
 import { cmd } from "./cmd"
 import { Session } from "../../session"
 import { bootstrap } from "../bootstrap"
@@ -31,7 +32,9 @@ export const SessionListCommand = cmd({
       })
   },
   handler: async (args) => {
-    await bootstrap(process.cwd(), async () => {
+    const dir = Array.isArray(args.dir) ? args.dir[0] : args.dir
+    const cwd = dir ? path.resolve(dir) : process.cwd()
+    await bootstrap(cwd, async () => {
       const sessions = []
       for await (const session of Session.list()) {
         if (!session.parentID) {
