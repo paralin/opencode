@@ -1,8 +1,10 @@
 import type { Argv } from "yargs"
+import path from "path"
 import { Effect, Schema } from "effect"
 import { AppRuntime, type AppServices } from "@/effect/app-runtime"
 import { InstanceStore } from "@/project/instance-store"
 import { InstanceRef } from "@/effect/instance-ref"
+import { Instance } from "@/project/instance"
 import { cmd, type WithDoubleDash } from "./cmd/cmd"
 
 /**
@@ -81,12 +83,24 @@ export const effectCmd = <Args, A>(opts: EffectCmdOpts<Args, A>) =>
         await AppRuntime.runPromise(opts.handler(args))
         return
       }
-      const directory = opts.directory?.(args) ?? process.cwd()
+      const directory =
+        opts.directory?.(args) ??
+        (typeof (args as { dir?: unknown }).dir === "string"
+          ? path.resolve((args as { dir: string }).dir)
+          : process.cwd())
+      // Two-phase: load ctx, then run body inside Instance.current ALS.
+      // Effect's InstanceRef is provided via fiber context, but that context is
+      // lost across `await` inside `Effect.promise(async () => ...)` callbacks
+      // — when handlers re-enter Effect via `AppRuntime.runPromise(svc.method())`
+      // there, attach() falls back to Instance.current ALS, which Node preserves
+      // across awaits. Matches the pre-effectCmd `bootstrap()` behavior.
       const { store, ctx } = await AppRuntime.runPromise(
         InstanceStore.Service.use((store) => store.load({ directory }).pipe(Effect.map((ctx) => ({ store, ctx })))),
       )
       try {
-        await AppRuntime.runPromise(opts.handler(args).pipe(Effect.provideService(InstanceRef, ctx)))
+        await Instance.restore(ctx, () =>
+          AppRuntime.runPromise(opts.handler(args).pipe(Effect.provideService(InstanceRef, ctx))),
+        )
       } finally {
         await AppRuntime.runPromise(store.dispose(ctx))
       }

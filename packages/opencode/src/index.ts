@@ -88,6 +88,10 @@ const cli = yargs(args)
     describe: "run without external plugins",
     type: "boolean",
   })
+  .option("dir", {
+    describe: "directory to run in",
+    type: "string",
+  })
   .middleware(async (opts) => {
     if (opts.pure) {
       process.env.OPENCODE_PURE = "1"
