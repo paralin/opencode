@@ -1,4 +1,5 @@
 import type { Argv } from "yargs"
+import path from "path"
 import { cmd } from "./cmd"
 import { Session } from "../../session"
 import { bootstrap } from "../bootstrap"
@@ -35,6 +36,10 @@ export const StatsCommand = cmd({
   describe: "show token usage and cost statistics",
   builder: (yargs: Argv) => {
     return yargs
+      .option("dir", {
+        describe: "directory to run in",
+        type: "string",
+      })
       .option("days", {
         describe: "show stats for the last N days (default: all time)",
         type: "number",
@@ -49,7 +54,8 @@ export const StatsCommand = cmd({
       })
   },
   handler: async (args) => {
-    await bootstrap(process.cwd(), async () => {
+    const cwd = args.dir ? path.resolve(args.dir) : process.cwd()
+    await bootstrap(cwd, async () => {
       const stats = await aggregateSessionStats(args.days, args.project)
       displayStats(stats, args.tools)
     })

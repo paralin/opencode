@@ -13,11 +13,11 @@ declare global {
 }
 
 export const TuiThreadCommand = cmd({
-  command: "$0 [project]",
+  command: "$0",
   describe: "start opencode tui",
   builder: (yargs) =>
     yargs
-      .positional("project", {
+      .option("dir", {
         type: "string",
         describe: "path to start opencode in",
       })
@@ -56,10 +56,10 @@ export const TuiThreadCommand = cmd({
         default: "127.0.0.1",
       }),
   handler: async (args) => {
-    // Resolve relative paths against PWD to preserve behavior when using --cwd flag
+    // Resolve relative paths against PWD to preserve behavior when using --dir flag
     const baseCwd = process.env.PWD ?? process.cwd()
-    const cwd = args.project
-      ? path.resolve(baseCwd, args.project)
+    const cwd = args.dir
+      ? path.resolve(baseCwd, args.dir)
       : Installation.isLocal()
         ? path.resolve(process.cwd(), "../..")
         : process.cwd()
@@ -98,11 +98,11 @@ export const TuiThreadCommand = cmd({
       port: args.port,
       hostname: args.hostname,
     })
-    const prompt = await iife(async () => {
+    const prompt = await (async () => {
       const piped = !process.stdin.isTTY ? await Bun.stdin.text() : undefined
       if (!args.prompt) return piped
       return piped ? piped + "\n" + args.prompt : args.prompt
-    })
+    })()
 
     const tuiPromise = tui({
       url: server.url,

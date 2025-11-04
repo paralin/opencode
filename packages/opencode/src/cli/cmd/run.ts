@@ -35,6 +35,10 @@ export const RunCommand = cmd({
         array: true,
         default: [],
       })
+      .option("dir", {
+        describe: "directory to run in",
+        type: "string",
+      })
       .option("command", {
         describe: "the command to run, use message for args",
         type: "string",
@@ -88,6 +92,7 @@ export const RunCommand = cmd({
       })
   },
   handler: async (args) => {
+    const cwd = args.dir ? path.resolve(args.dir) : process.cwd()
     let message = args.message.join(" ")
 
     const fileParts: any[] = []
@@ -95,7 +100,7 @@ export const RunCommand = cmd({
       const files = Array.isArray(args.file) ? args.file : [args.file]
 
       for (const filePath of files) {
-        const resolvedPath = path.resolve(process.cwd(), filePath)
+        const resolvedPath = path.resolve(cwd, filePath)
         const file = Bun.file(resolvedPath)
         const stats = await file.stat().catch(() => {})
         if (!stats) {
@@ -288,8 +293,8 @@ export const RunCommand = cmd({
       return await execute(sdk, sessionID)
     }
 
-    await bootstrap(process.cwd(), async () => {
-      const server = Server.listen({ port: args.port ?? 0, hostname: "127.0.0.1" })
+    await bootstrap(cwd, async () => {
+      const server = Server.listen({ port: args.port ?? 0, hostname: "127.0.0.1", directory: cwd })
       const sdk = createOpencodeClient({ baseUrl: `http://${server.hostname}:${server.port}` })
 
       if (args.command) {

@@ -43,6 +43,7 @@ import { Snapshot } from "@/snapshot"
 import { SessionSummary } from "@/session/summary"
 import { GlobalBus } from "@/bus/global"
 import { SessionStatus } from "@/session/status"
+import path from "path"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -85,6 +86,16 @@ export namespace Server {
 
   export const Event = {
     Connected: Bus.event("server.connected", z.object({})),
+  }
+
+  let defaultDirectory: string | undefined
+  let lockedDirectory: string | undefined
+
+  function isPathAllowed(requestedPath: string): boolean {
+    if (!lockedDirectory) return true
+    const resolved = path.resolve(requestedPath)
+    const locked = path.resolve(lockedDirectory)
+    return resolved === locked || resolved.startsWith(locked + path.sep)
   }
 
   const app = new Hono()
@@ -169,7 +180,23 @@ export namespace Server {
         },
       )
       .use(async (c, next) => {
-        const directory = c.req.query("directory") ?? c.req.header("x-opencode-directory") ?? process.cwd()
+        const requestedDirectory = c.req.query("directory") ?? c.req.header("x-opencode-directory")
+
+        // If a directory is explicitly requested, validate it's allowed
+        if (requestedDirectory && !isPathAllowed(requestedDirectory)) {
+          log.warn("directory access denied", {
+            requested: requestedDirectory,
+            locked: lockedDirectory,
+          })
+          return c.json(
+            new NamedError.Unknown({
+              message: `Access denied: cannot access directory outside of ${lockedDirectory}`,
+            }).toObject(),
+            { status: 403 },
+          )
+        }
+
+        const directory = requestedDirectory ?? defaultDirectory ?? process.cwd()
         return Instance.provide({
           directory,
           init: InstanceBootstrap,
@@ -2094,7 +2121,11 @@ export namespace Server {
     return result
   }
 
-  export function listen(opts: { port: number; hostname: string }) {
+  export function listen(opts: { port: number; hostname: string; directory?: string }) {
+    if (opts.directory) {
+      defaultDirectory = opts.directory
+      lockedDirectory = opts.directory
+    }
     const server = Bun.serve({
       port: opts.port,
       hostname: opts.hostname,

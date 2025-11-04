@@ -367,6 +367,10 @@ export const GithubRunCommand = cmd({
   describe: "run the GitHub agent",
   builder: (yargs) =>
     yargs
+      .option("dir", {
+        type: "string",
+        describe: "directory to run in",
+      })
       .option("event", {
         type: "string",
         describe: "GitHub mock event to run the agent for",
@@ -376,7 +380,8 @@ export const GithubRunCommand = cmd({
         describe: "GitHub personal access token (github_pat_********)",
       }),
   async handler(args) {
-    await bootstrap(process.cwd(), async () => {
+    const cwd = args.dir ? path.resolve(args.dir) : process.cwd()
+    await bootstrap(cwd, async () => {
       const isMock = args.token || args.event
 
       const context = isMock ? (JSON.parse(args.event!) as Context) : github.context

@@ -3,6 +3,8 @@ import { UI } from "../ui"
 import { cmd } from "./cmd"
 import open from "open"
 import { networkInterfaces } from "os"
+import { bootstrap } from "../bootstrap"
+import path from "path"
 
 function getNetworkIPs() {
   const nets = networkInterfaces()
@@ -40,45 +42,53 @@ export const WebCommand = cmd({
         type: "string",
         describe: "hostname to listen on",
         default: "127.0.0.1",
+      })
+      .option("dir", {
+        describe: "directory to run in",
+        type: "string",
       }),
   describe: "starts a headless opencode server",
   handler: async (args) => {
+    const cwd = args.dir ? path.resolve(args.dir) : process.cwd()
     const hostname = args.hostname
     const port = args.port
-    const server = Server.listen({
-      port,
-      hostname,
-    })
-    UI.empty()
-    UI.println(UI.logo("  "))
-    UI.empty()
+    await bootstrap(cwd, async () => {
+      const server = Server.listen({
+        port,
+        hostname,
+        directory: cwd,
+      })
+      UI.empty()
+      UI.println(UI.logo("  "))
+      UI.empty()
 
-    if (hostname === "0.0.0.0") {
-      // Show localhost for local access
-      const localhostUrl = `http://localhost:${server.port}`
-      UI.println(UI.Style.TEXT_INFO_BOLD + "  Local access:      ", UI.Style.TEXT_NORMAL, localhostUrl)
+      if (hostname === "0.0.0.0") {
+        // Show localhost for local access
+        const localhostUrl = `http://localhost:${server.port}`
+        UI.println(UI.Style.TEXT_INFO_BOLD + "  Local access:      ", UI.Style.TEXT_NORMAL, localhostUrl)
 
-      // Show network IPs for remote access
-      const networkIPs = getNetworkIPs()
-      if (networkIPs.length > 0) {
-        for (const ip of networkIPs) {
-          UI.println(
-            UI.Style.TEXT_INFO_BOLD + "  Network access:    ",
-            UI.Style.TEXT_NORMAL,
-            `http://${ip}:${server.port}`,
-          )
+        // Show network IPs for remote access
+        const networkIPs = getNetworkIPs()
+        if (networkIPs.length > 0) {
+          for (const ip of networkIPs) {
+            UI.println(
+              UI.Style.TEXT_INFO_BOLD + "  Network access:    ",
+              UI.Style.TEXT_NORMAL,
+              `http://${ip}:${server.port}`,
+            )
+          }
         }
+
+        // Open localhost in browser
+        open(localhostUrl.toString()).catch(() => {})
+      } else {
+        const displayUrl = server.url.toString()
+        UI.println(UI.Style.TEXT_INFO_BOLD + "  Web interface:    ", UI.Style.TEXT_NORMAL, displayUrl)
+        open(displayUrl).catch(() => {})
       }
 
-      // Open localhost in browser
-      open(localhostUrl.toString()).catch(() => {})
-    } else {
-      const displayUrl = server.url.toString()
-      UI.println(UI.Style.TEXT_INFO_BOLD + "  Web interface:    ", UI.Style.TEXT_NORMAL, displayUrl)
-      open(displayUrl).catch(() => {})
-    }
-
-    await new Promise(() => {})
-    await server.stop()
+      await new Promise(() => {})
+      await server.stop()
+    })
   },
 })
