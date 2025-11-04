@@ -12,6 +12,7 @@ import { Filesystem } from "@/util/filesystem"
 import type { GlobalEvent } from "@opencode-ai/sdk/v2"
 import type { EventSource } from "./context/sdk"
 import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
+import { Installation } from "@/installation"
 import { writeHeapSnapshot } from "v8"
 import { TuiConfig } from "./config/tui"
 import {
@@ -70,18 +71,19 @@ async function input(value?: string) {
   return piped + "\n" + value
 }
 
-export function resolveThreadDirectory(project?: string, envPWD = process.env.PWD, cwd = process.cwd()) {
+export function resolveThreadDirectory(dir?: string, envPWD = process.env.PWD, cwd = process.cwd()) {
   const root = Filesystem.resolve(envPWD ?? cwd)
-  if (project) return Filesystem.resolve(path.isAbsolute(project) ? project : path.join(root, project))
-  return Filesystem.resolve(cwd)
+  if (dir) return Filesystem.resolve(path.isAbsolute(dir) ? dir : path.join(root, dir))
+  if (Installation.isLocal()) return Filesystem.resolve(path.resolve(cwd, "../.."))
+  return root
 }
 
 export const TuiThreadCommand = cmd({
-  command: "$0 [project]",
+  command: "$0",
   describe: "start opencode tui",
   builder: (yargs) =>
     withNetworkOptions(yargs)
-      .positional("project", {
+      .option("dir", {
         type: "string",
         describe: "path to start opencode in",
       })
@@ -111,6 +113,20 @@ export const TuiThreadCommand = cmd({
       .option("agent", {
         type: "string",
         describe: "agent to use",
+      })
+      .option("model-variant", {
+        type: "string",
+        alias: ["variant"],
+        describe: "model variant (e.g. low, medium, high, max)",
+      })
+      .option("model-variant-thinking-budget", {
+        type: "number",
+        describe: "override the thinking token budget for the selected variant",
+      })
+      .option("tools", {
+        type: "string",
+        describe:
+          "comma-separated tool patterns to enable/disable (e.g., '-*,read,write,webfetch' to only enable those three)",
       }),
   handler: async (args) => {
     // Keep ENABLE_PROCESSED_INPUT cleared even if other code flips it.
@@ -127,9 +143,9 @@ export const TuiThreadCommand = cmd({
         return
       }
 
-      // Resolve relative --project paths from PWD, then use the real cwd after
-      // chdir so the thread and worker share the same directory key.
-      const next = resolveThreadDirectory(args.project)
+      // Resolve relative paths against PWD to preserve behavior when using --dir flag,
+      // then use the real cwd after chdir so the thread and worker share the same directory key.
+      const next = resolveThreadDirectory(args.dir)
       const file = await target()
       try {
         process.chdir(next)
@@ -198,24 +214,25 @@ export const TuiThreadCommand = cmd({
         network.port !== 0 ||
         network.hostname !== "127.0.0.1"
 
-      const transport = external
-        ? {
-            url: (await client.call("server", network)).url,
-            fetch: undefined,
-            events: undefined,
-          }
-        : {
-            url: "http://opencode.internal",
-            fetch: createWorkerFetch(client),
-            events: createEventSource(client),
-          }
+      let url: string
+      let customFetch: typeof fetch | undefined
+      let events: EventSource | undefined
+
+      if (external) {
+        const server = await client.call("server", network)
+        url = server.url
+      } else {
+        url = "http://opencode.internal"
+        customFetch = createWorkerFetch(client)
+        events = createEventSource(client)
+      }
 
       try {
         await validateSession({
-          url: transport.url,
+          url,
           sessionID: args.session,
           directory: cwd,
-          fetch: transport.fetch,
+          fetch: customFetch,
         })
       } catch (error) {
         UI.error(errorMessage(error))
@@ -230,7 +247,7 @@ export const TuiThreadCommand = cmd({
       try {
         const { tui } = await import("./app")
         await tui({
-          url: transport.url,
+          url,
           async onSnapshot() {
             const tui = writeHeapSnapshot("tui.heapsnapshot")
             const server = await client.call("snapshot", undefined)
@@ -238,15 +255,18 @@ export const TuiThreadCommand = cmd({
           },
           config,
           directory: cwd,
-          fetch: transport.fetch,
-          events: transport.events,
+          fetch: customFetch,
+          events,
           args: {
             continue: args.continue,
             sessionID: args.session,
             agent: args.agent,
             model: args.model,
+            variant: args.modelVariant,
+            thinkingBudget: args.modelVariantThinkingBudget,
             prompt,
             fork: args.fork,
+            tools: args.tools,
           },
         })
       } finally {
