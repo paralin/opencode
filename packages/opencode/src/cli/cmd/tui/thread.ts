@@ -6,6 +6,7 @@ import path from "path"
 import { UI } from "@/cli/ui"
 import { iife } from "@/util/iife"
 import { Log } from "@/util/log"
+import { Installation } from "@/installation"
 
 declare global {
   const OPENCODE_WORKER_PATH: string
@@ -57,13 +58,18 @@ export const TuiThreadCommand = cmd({
   handler: async (args) => {
     // Resolve relative paths against PWD to preserve behavior when using --cwd flag
     const baseCwd = process.env.PWD ?? process.cwd()
-    const cwd = args.project ? path.resolve(baseCwd, args.project) : process.cwd()
-    const localWorker = new URL("./worker.ts", import.meta.url)
+    const cwd = args.project
+      ? path.resolve(baseCwd, args.project)
+      : Installation.isLocal()
+        ? path.resolve(process.cwd(), "../..")
+        : process.cwd()
+    const defaultWorker = new URL("./worker.ts", import.meta.url)
+    // Nix build creates a bundled worker next to the binary; prefer it when present.
     const distWorker = new URL("./cli/cmd/tui/worker.js", import.meta.url)
     const workerPath = await iife(async () => {
       if (typeof OPENCODE_WORKER_PATH !== "undefined") return OPENCODE_WORKER_PATH
       if (await Bun.file(distWorker).exists()) return distWorker
-      return localWorker
+      return defaultWorker
     })
     try {
       process.chdir(cwd)
