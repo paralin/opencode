@@ -108,12 +108,18 @@ export const ReadTool = Tool.define("read", {
         throw new Error(`Failed to read image: ${filepath}, model may not be able to read images`)
       }
       const mime = file.type
-      const msg = "Image read successfully"
+      const stat = await file.stat()
+      const fileSize = stat.size
+      const dimensions = await getImageDimensions(file, mime)
+      const sizeKB = (fileSize / 1024).toFixed(2)
+
+      const msg = `Image file details:\n- Path: ${filepath}\n- Type: ${isImage}\n- Size: ${sizeKB} KB${dimensions ? `\n- Dimensions: ${dimensions.width}x${dimensions.height}` : ""}\n\nThe image content has been attached and can be analyzed.`
+
       return {
         title,
         output: msg,
         metadata: {
-          preview: msg,
+          preview: `Image: ${path.basename(filepath)} (${sizeKB} KB)`,
         },
         attachments: [
           {
@@ -187,6 +193,62 @@ function isImageFile(filePath: string): string | false {
     default:
       return false
   }
+}
+
+async function getImageDimensions(file: Bun.BunFile, mime: string): Promise<{ width: number; height: number } | null> {
+  const buffer = await file.arrayBuffer()
+  const bytes = new Uint8Array(buffer)
+
+  if (mime === "image/png" || mime.includes("png")) {
+    if (bytes.length < 24) return null
+    if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+      const width = (bytes[16] << 24) | (bytes[17] << 16) | (bytes[18] << 8) | bytes[19]
+      const height = (bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23]
+      return { width, height }
+    }
+  }
+
+  if (mime === "image/jpeg" || mime.includes("jpeg") || mime.includes("jpg")) {
+    if (bytes.length < 4) return null
+    if (bytes[0] === 0xff && bytes[1] === 0xd8) {
+      let offset = 2
+      while (offset < bytes.length - 9) {
+        if (bytes[offset] !== 0xff) break
+        const marker = bytes[offset + 1]
+        if (marker === 0xc0 || marker === 0xc2) {
+          const height = (bytes[offset + 5] << 8) | bytes[offset + 6]
+          const width = (bytes[offset + 7] << 8) | bytes[offset + 8]
+          return { width, height }
+        }
+        const segmentLength = (bytes[offset + 2] << 8) | bytes[offset + 3]
+        offset += segmentLength + 2
+      }
+    }
+  }
+
+  if (mime === "image/gif" || mime.includes("gif")) {
+    if (bytes.length < 10) return null
+    if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
+      const width = bytes[6] | (bytes[7] << 8)
+      const height = bytes[8] | (bytes[9] << 8)
+      return { width, height }
+    }
+  }
+
+  if (mime === "image/webp" || mime.includes("webp")) {
+    if (bytes.length < 30) return null
+    if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {
+      if (bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
+        if (bytes[12] === 0x56 && bytes[13] === 0x50 && bytes[14] === 0x38) {
+          const width = (bytes[26] | (bytes[27] << 8) | (bytes[28] << 16)) + 1
+          const height = (bytes[29] | (bytes[30] << 8) | (bytes[31] << 16)) + 1
+          return { width, height }
+        }
+      }
+    }
+  }
+
+  return null
 }
 
 async function isBinaryFile(filepath: string, file: Bun.BunFile): Promise<boolean> {

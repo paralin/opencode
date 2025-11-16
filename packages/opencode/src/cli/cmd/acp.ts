@@ -48,7 +48,6 @@ export const AcpCommand = cmd({
         baseUrl: `http://${server.hostname}:${server.port}`,
       })
 
-
       const input = new WritableStream<Uint8Array>({
         write(chunk) {
           return new Promise<void>((resolve, reject) => {
