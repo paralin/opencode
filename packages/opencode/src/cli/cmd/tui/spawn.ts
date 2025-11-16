@@ -46,11 +46,7 @@ export const TuiSpawnCommand = cmd({
       "attach",
       server.url.toString(),
       "--dir",
-      args.dir
-        ? path.resolve(args.dir)
-        : Installation.isLocal()
-          ? path.resolve(process.cwd(), "../..")
-          : process.cwd(),
+      args.dir ? path.resolve(args.dir) : Installation.isLocal() ? path.resolve(process.cwd(), "../..") : process.cwd(),
     )
     const proc = Bun.spawn({
       cmd,
