@@ -8,7 +8,7 @@ import DESCRIPTION from "./read.txt"
 import { InstanceState } from "@/effect/instance-state"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { Instruction } from "../session/instruction"
-import { isPdfAttachment, sniffAttachmentMime } from "@/util/media"
+import { isImageAttachment, isPdfAttachment, sniffAttachmentMime } from "@/util/media"
 import { Reference } from "@/reference/reference"
 
 const DEFAULT_READ_LIMIT = 2000
@@ -269,7 +269,17 @@ export const ReadTool = Tool.define(
 
       if (isImage || isPdfAttachment(mime)) {
         const bytes = yield* fs.readFile(filepath)
-        const msg = isPdfAttachment(mime) ? "PDF read successfully" : "Image read successfully"
+        const dimensions = isImageAttachment(mime) ? imageDimensions(bytes, mime) : undefined
+        const msg = isPdfAttachment(mime)
+          ? "PDF read successfully"
+          : [
+              "Image read successfully",
+              `Format: ${imageFormat(filepath, mime)}`,
+              `Size: ${formatFileSize(Number(stat.size))}`,
+              dimensions ? `Dimensions: ${dimensions.width}x${dimensions.height}` : undefined,
+            ]
+              .filter((value) => value !== undefined)
+              .join("\n")
         return {
           title,
           output: msg,
@@ -339,3 +349,90 @@ export const ReadTool = Tool.define(
     }
   }),
 )
+
+function formatFileSize(size: number) {
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function imageFormat(filepath: string, mime: string) {
+  if (mime === "image/jpeg") return "JPEG"
+  if (mime === "image/png") return "PNG"
+  if (mime === "image/gif") return "GIF"
+  if (mime === "image/bmp") return "BMP"
+  if (mime === "image/webp") return "WebP"
+
+  const ext = path.extname(filepath).toLowerCase()
+  if (ext === ".jpg" || ext === ".jpeg") return "JPEG"
+  if (ext === ".png") return "PNG"
+  if (ext === ".gif") return "GIF"
+  if (ext === ".bmp") return "BMP"
+  if (ext === ".webp") return "WebP"
+  return mime.replace("image/", "").toUpperCase()
+}
+
+function imageDimensions(bytes: Uint8Array, mime: string): { width: number; height: number } | undefined {
+  if (mime === "image/png") {
+    if (bytes.length < 24) return
+    if (bytes[0] !== 0x89 || bytes[1] !== 0x50 || bytes[2] !== 0x4e || bytes[3] !== 0x47) return
+    const width = (bytes[16] << 24) | (bytes[17] << 16) | (bytes[18] << 8) | bytes[19]
+    const height = (bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23]
+    return { width, height }
+  }
+
+  if (mime === "image/jpeg") {
+    if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return
+    let offset = 2
+    while (offset < bytes.length - 9) {
+      if (bytes[offset] !== 0xff) return
+      const marker = bytes[offset + 1]
+      if (marker === 0xc0 || marker === 0xc2) {
+        const height = (bytes[offset + 5] << 8) | bytes[offset + 6]
+        const width = (bytes[offset + 7] << 8) | bytes[offset + 8]
+        return { width, height }
+      }
+      const size = (bytes[offset + 2] << 8) | bytes[offset + 3]
+      offset += size + 2
+    }
+    return
+  }
+
+  if (mime === "image/gif") {
+    if (bytes.length < 10 || bytes[0] !== 0x47 || bytes[1] !== 0x49 || bytes[2] !== 0x46) return
+    return {
+      width: bytes[6] | (bytes[7] << 8),
+      height: bytes[8] | (bytes[9] << 8),
+    }
+  }
+
+  if (mime === "image/bmp") {
+    if (bytes.length < 26 || bytes[0] !== 0x42 || bytes[1] !== 0x4d) return
+    return {
+      width: bytes[18] | (bytes[19] << 8) | (bytes[20] << 16) | (bytes[21] << 24),
+      height: Math.abs(bytes[22] | (bytes[23] << 8) | (bytes[24] << 16) | (bytes[25] << 24)),
+    }
+  }
+
+  if (mime === "image/webp") {
+    if (bytes.length < 32) return
+    if (
+      bytes[0] !== 0x52 ||
+      bytes[1] !== 0x49 ||
+      bytes[2] !== 0x46 ||
+      bytes[3] !== 0x46 ||
+      bytes[8] !== 0x57 ||
+      bytes[9] !== 0x45 ||
+      bytes[10] !== 0x42 ||
+      bytes[11] !== 0x50 ||
+      bytes[12] !== 0x56 ||
+      bytes[13] !== 0x50 ||
+      bytes[14] !== 0x38
+    )
+      return
+    return {
+      width: (bytes[26] | (bytes[27] << 8) | (bytes[28] << 16)) + 1,
+      height: (bytes[29] | (bytes[30] << 8) | (bytes[31] << 16)) + 1,
+    }
+  }
+}
