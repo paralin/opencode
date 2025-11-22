@@ -25,6 +25,8 @@ import { createColors, createFrames } from "../../ui/spinner.ts"
 import { useDialog } from "@tui/ui/dialog"
 import { DialogProvider as DialogProviderConnect } from "../dialog-provider"
 import { useToast } from "../../ui/toast"
+import { useArgs } from "../../context/args"
+import { Wildcard } from "@/util/wildcard"
 
 export type PromptProps = {
   sessionID?: string
@@ -55,6 +57,7 @@ export function Prompt(props: PromptProps) {
   const sync = useSync()
   const dialog = useDialog()
   const toast = useToast()
+  const args = useArgs()
   const status = createMemo(() => sync.data.session_status[props.sessionID ?? ""] ?? { type: "idle" })
   const history = usePromptHistory()
   const command = useCommandDialog()
@@ -474,6 +477,7 @@ export function Prompt(props: PromptProps) {
         },
       })
     } else {
+      const tools = Wildcard.parseToolsPattern(args.tools)
       sdk.client.session.prompt({
         path: {
           id: sessionID,
@@ -483,6 +487,7 @@ export function Prompt(props: PromptProps) {
           messageID,
           agent: local.agent.current().name,
           model: selectedModel,
+          ...(tools && { tools }),
           parts: [
             {
               id: Identifier.ascending("part"),

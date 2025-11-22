@@ -5,6 +5,7 @@ import open from "open"
 import { networkInterfaces } from "os"
 import { bootstrap } from "../bootstrap"
 import path from "path"
+import { Wildcard } from "@/util/wildcard"
 
 function getNetworkIPs() {
   const nets = networkInterfaces()
@@ -46,17 +47,24 @@ export const WebCommand = cmd({
       .option("dir", {
         describe: "directory to run in",
         type: "string",
+      })
+      .option("tools", {
+        type: "string",
+        describe:
+          "comma-separated tool patterns to enable/disable (e.g., '-*,read,write,webfetch' to only enable those three)",
       }),
   describe: "starts a headless opencode server",
   handler: async (args) => {
     const cwd = args.dir ? path.resolve(args.dir) : process.cwd()
     const hostname = args.hostname
     const port = args.port
+    const tools = Wildcard.parseToolsPattern(args.tools)
     await bootstrap(cwd, async () => {
       const server = Server.listen({
         port,
         hostname,
         directory: cwd,
+        tools,
       })
       UI.empty()
       UI.println(UI.logo("  "))
