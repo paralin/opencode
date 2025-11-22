@@ -2050,13 +2050,33 @@ export namespace Server {
           })
         },
       )
-      .all("/*", async (c) => {
-        return proxy(`https://desktop.dev.opencode.ai${c.req.path}`, {
-          ...c.req,
-          headers: {
-            host: "desktop.dev.opencode.ai",
-          },
-        })
+      .get("/*", async (c) => {
+        // Serve static files from local desktop build
+        // import.meta.dir is packages/opencode/src/server, so go up 3 levels to repo root
+        const distPath = path.join(import.meta.dir, "../../../desktop/dist")
+        const requestPath = c.req.path === "/" ? "/index.html" : c.req.path
+        const filePath = path.join(distPath, requestPath)
+
+        try {
+          const file = Bun.file(filePath)
+          if (await file.exists()) {
+            // file.type contains the MIME type, but we need to set it explicitly in the response
+            return new Response(file, {
+              headers: {
+                "Content-Type": file.type || "application/octet-stream",
+              },
+            })
+          }
+          // Fallback to index.html for client-side routing
+          const indexFile = Bun.file(path.join(distPath, "index.html"))
+          return new Response(indexFile, {
+            headers: {
+              "Content-Type": indexFile.type || "text/html",
+            },
+          })
+        } catch (error) {
+          return c.text("Not found", 404)
+        }
       }),
   )
 
