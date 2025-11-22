@@ -44,6 +44,21 @@ export function allStructured(input: { head: string; tail: string[] }, patterns:
   return result
 }
 
+export function parseToolsPattern(pattern: string | undefined): Record<string, boolean> | undefined {
+  if (!pattern?.trim()) return undefined
+  const result: Record<string, boolean> = {}
+  const parts = pattern.split(",").map((x) => x.trim())
+  for (const part of parts) {
+    if (!part) continue
+    if (part.startsWith("-")) {
+      result[part.slice(1)] = false
+      continue
+    }
+    result[part] = true
+  }
+  return result
+}
+
 function matchSequence(items: string[], patterns: string[]): boolean {
   if (patterns.length === 0) return true
   const [pattern, ...rest] = patterns

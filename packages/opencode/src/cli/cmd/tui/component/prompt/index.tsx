@@ -61,6 +61,7 @@ import { Flag } from "@opencode-ai/core/flag/flag"
 import { type WorkspaceStatus } from "../workspace-label"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useLeaderActive, useOpencodeKeymap } from "../../keymap"
 import { useTuiConfig } from "../../context/tui-config"
+import { Wildcard } from "@/util/wildcard"
 
 export type PromptProps = {
   sessionID?: string
@@ -1156,12 +1157,12 @@ export function Prompt(props: PromptProps) {
       const firstLine = firstLineEnd === -1 ? inputText : inputText.slice(0, firstLineEnd)
       const [command, ...firstLineArgs] = firstLine.split(" ")
       const restOfInput = firstLineEnd === -1 ? "" : inputText.slice(firstLineEnd + 1)
-      const args = firstLineArgs.join(" ") + (restOfInput ? "\n" + restOfInput : "")
+      const commandArgs = firstLineArgs.join(" ") + (restOfInput ? "\n" + restOfInput : "")
 
       void sdk.client.session.command({
         sessionID,
         command: command.slice(1),
-        arguments: args,
+        arguments: commandArgs,
         agent: agent.name,
         model: `${selectedModel.providerID}/${selectedModel.modelID}`,
         messageID,
@@ -1174,6 +1175,7 @@ export function Prompt(props: PromptProps) {
           })),
       })
     } else {
+      const tools = Wildcard.parseToolsPattern(args.tools)
       sdk.client.session
         .prompt({
           sessionID,
@@ -1182,6 +1184,7 @@ export function Prompt(props: PromptProps) {
           agent: agent.name,
           model: selectedModel,
           variant,
+          ...(tools && { tools }),
           parts: [
             ...editorParts,
             {

@@ -88,3 +88,42 @@ test("match handles case-insensitivity on Windows", () => {
     expect(Wildcard.match("/users/test/file", "/Users/test/*")).toBe(false)
   }
 })
+
+test("parseToolsPattern handles empty and undefined", () => {
+  expect(Wildcard.parseToolsPattern(undefined)).toBeUndefined()
+  expect(Wildcard.parseToolsPattern("")).toBeUndefined()
+  expect(Wildcard.parseToolsPattern("   ")).toBeUndefined()
+})
+
+test("parseToolsPattern disables all tools", () => {
+  expect(Wildcard.parseToolsPattern("-*")).toEqual({ "*": false })
+})
+
+test("parseToolsPattern enables all tools", () => {
+  expect(Wildcard.parseToolsPattern("*")).toEqual({ "*": true })
+})
+
+test("parseToolsPattern disables all and enables specific tools", () => {
+  expect(Wildcard.parseToolsPattern("-*,read,write,webfetch")).toEqual({
+    "*": false,
+    read: true,
+    write: true,
+    webfetch: true,
+  })
+})
+
+test("parseToolsPattern enables only specific tools", () => {
+  expect(Wildcard.parseToolsPattern("read,write,webfetch")).toEqual({
+    read: true,
+    write: true,
+    webfetch: true,
+  })
+})
+
+test("parseToolsPattern handles whitespace", () => {
+  expect(Wildcard.parseToolsPattern(" -* , read , write ")).toEqual({
+    "*": false,
+    read: true,
+    write: true,
+  })
+})

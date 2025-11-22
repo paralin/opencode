@@ -7,6 +7,7 @@ import { Flag } from "@opencode-ai/core/flag/flag"
 import open from "open"
 import { networkInterfaces } from "os"
 import path from "path"
+import { Wildcard } from "@/util/wildcard"
 
 function getNetworkIPs() {
   const nets = networkInterfaces()
@@ -32,7 +33,12 @@ function getNetworkIPs() {
 
 export const WebCommand = effectCmd({
   command: "web",
-  builder: (yargs) => withNetworkOptions(yargs),
+  builder: (yargs) =>
+    withNetworkOptions(yargs).option("tools", {
+      type: "string",
+      describe:
+        "comma-separated tool patterns to enable/disable (e.g., '-*,read,write,webfetch' to only enable those three)",
+    }),
   describe: "start opencode server and open web interface",
   // Server loads instances per-request via x-opencode-directory header — no
   // ambient project InstanceContext needed at startup.
@@ -42,10 +48,12 @@ export const WebCommand = effectCmd({
       UI.println(UI.Style.TEXT_WARNING_BOLD + "!  OPENCODE_SERVER_PASSWORD is not set; server is unsecured.")
     }
     const opts = yield* resolveNetworkOptions(args)
+    const tools = Wildcard.parseToolsPattern(args.tools)
     const server = yield* Effect.promise(() =>
       Server.listen({
         ...opts,
         directory: typeof args.dir === "string" ? path.resolve(args.dir) : process.cwd(),
+        tools,
       }),
     )
     UI.empty()
