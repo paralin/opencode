@@ -1,9 +1,11 @@
 import "./init-projectors"
 
 import { NodeHttpServer } from "@effect/platform-node"
+import path from "path"
+import { NamedError } from "@opencode-ai/core/util/error"
 import * as Log from "@opencode-ai/core/util/log"
 import { ConfigProvider, Context, Effect, Exit, Layer, Scope } from "effect"
-import { HttpRouter, HttpServer } from "effect/unstable/http"
+import { HttpMiddleware, HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { OpenApi } from "effect/unstable/httpapi"
 import { createServer } from "node:http"
 import { MDNS } from "./mdns"
@@ -19,6 +21,10 @@ globalThis.AI_SDK_LOG_WARNINGS = false
 
 const log = Log.create({ service: "server" })
 
+let _url: URL | undefined
+let defaultTools: Record<string, boolean> | undefined
+let lockedDirectory: string | undefined
+
 export type Listener = {
   hostname: string
   port: number
@@ -31,11 +37,28 @@ type ServerApp = {
   request(input: string | URL | Request, init?: RequestInit): Response | Promise<Response>
 }
 
+export function url(): URL {
+  return _url ?? new URL("http://localhost:4096")
+}
+
+export function tools(): Record<string, boolean> | undefined {
+  return defaultTools
+}
+
+function isPathAllowed(requestedPath: string): boolean {
+  if (!lockedDirectory) return true
+  const resolved = path.resolve(requestedPath)
+  const locked = path.resolve(lockedDirectory)
+  return resolved === locked || resolved.startsWith(locked + path.sep)
+}
+
 type ListenOptions = CorsOptions & {
   port: number
   hostname: string
   mdns?: boolean
   mdnsDomain?: string
+  directory?: string
+  tools?: Record<string, boolean>
 }
 type ListenerState = {
   scope: Scope.Scope
@@ -70,9 +93,9 @@ export async function openapi() {
   return OpenApi.fromApi(PublicApi)
 }
 
-export let url: URL
-
 export async function listen(opts: ListenOptions): Promise<Listener> {
+  lockedDirectory = opts.directory
+  defaultTools = opts.tools
   const listener = await Effect.runPromise(listenEffect(opts))
   return {
     hostname: listener.hostname,
@@ -87,7 +110,7 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unkno
     const state = yield* startWithPortFallback(opts)
     const address = yield* tcpAddress(state)
     const listenerUrl = makeURL(opts.hostname, address.port)
-    url = listenerUrl
+    _url = listenerUrl
 
     const unpublishMdns = yield* setupMdns(opts, address.port, state.scope)
 
@@ -102,7 +125,7 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unkno
 
 function listenerLayer(opts: ListenOptions, port: number) {
   return HttpRouter.serve(HttpApiApp.createRoutes(opts), {
-    middleware: disposeMiddleware,
+    middleware: listenerMiddleware,
     disableLogger: true,
     disableListenLog: true,
   }).pipe(
@@ -115,6 +138,41 @@ function listenerLayer(opts: ListenOptions, port: number) {
     // every later `Server.listen()` keeps observing that initial snapshot.
     Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv())),
   )
+}
+
+const listenerMiddleware: HttpMiddleware.HttpMiddleware = (effect) =>
+  directoryGuardMiddleware(disposeMiddleware(effect))
+
+const directoryGuardMiddleware: HttpMiddleware.HttpMiddleware = (effect) =>
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest
+    const url = new URL(request.url, "http://localhost")
+    if (url.pathname === "/log") return yield* effect
+
+    const raw = url.searchParams.get("directory") ?? request.headers["x-opencode-directory"]
+    if (!raw) return yield* effect
+
+    const requested = decodeDirectory(raw)
+    if (isPathAllowed(requested)) return yield* effect
+
+    log.warn("directory access denied", {
+      requested,
+      locked: lockedDirectory,
+    })
+    return HttpServerResponse.jsonUnsafe(
+      new NamedError.Unknown({
+        message: `Access denied: cannot access directory outside of ${lockedDirectory}`,
+      }).toObject(),
+      { status: 403 },
+    )
+  })
+
+function decodeDirectory(input: string) {
+  try {
+    return decodeURIComponent(input)
+  } catch {
+    return input
+  }
 }
 
 function startWithPortFallback(opts: ListenOptions) {

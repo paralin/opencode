@@ -145,7 +145,7 @@ export const layer = Layer.effect(
             },
           },
           get serverUrl(): URL {
-            return Server.url ?? new URL("http://localhost:4096")
+            return Server.url()
           },
           // @ts-expect-error
           $: typeof Bun === "undefined" ? undefined : Bun.$,
