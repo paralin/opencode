@@ -62,6 +62,7 @@ export namespace Server {
 
   let defaultDirectory: string | undefined
   let lockedDirectory: string | undefined
+  let defaultTools: Record<string, boolean> | undefined
 
   function isPathAllowed(requestedPath: string): boolean {
     if (!lockedDirectory) return true
@@ -1325,7 +1326,11 @@ export namespace Server {
           return stream(c, async (stream) => {
             const sessionID = c.req.valid("param").sessionID
             const body = c.req.valid("json")
-            const msg = await SessionPrompt.prompt({ ...body, sessionID })
+            const msg = await SessionPrompt.prompt({
+              ...body,
+              sessionID,
+              tools: { ...defaultTools, ...body.tools },
+            })
             stream.write(JSON.stringify(msg))
           })
         },
@@ -2648,10 +2653,18 @@ export namespace Server {
     return result
   }
 
-  export function listen(opts: { port: number; hostname: string; directory?: string }) {
+  export function listen(opts: {
+    port: number
+    hostname: string
+    directory?: string
+    tools?: Record<string, boolean>
+  }) {
     if (opts.directory) {
       defaultDirectory = opts.directory
       lockedDirectory = opts.directory
+    }
+    if (opts.tools) {
+      defaultTools = opts.tools
     }
     const args = {
       hostname: opts.hostname,
