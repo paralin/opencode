@@ -472,6 +472,7 @@ export namespace SessionPrompt {
         modelID: model.info.id,
         agent,
         system: lastUser.system,
+        messages: msgs,
       })
       const tools = await resolveTools({
         agent,
@@ -646,6 +647,7 @@ export namespace SessionPrompt {
     agent: Agent.Info
     providerID: string
     modelID: string
+    messages?: MessageV2.WithParts[]
   }) {
     let system = SystemPrompt.header(input.providerID)
     system.push(
@@ -657,10 +659,40 @@ export namespace SessionPrompt {
     )
     system.push(...(await SystemPrompt.environment()))
     system.push(...(await SystemPrompt.custom()))
+
+    // Load knowledge files referenced in compacted summaries
+    const knowledgeRefs = extractKnowledgeReferences(input.messages ?? [])
+    if (knowledgeRefs.length > 0) {
+      const knowledge = await SystemPrompt.knowledge(knowledgeRefs)
+      if (knowledge.length > 0) {
+        system.push(...knowledge)
+      }
+    }
+
     // max 2 system prompt messages for caching purposes
     const [first, ...rest] = system
     system = [first, rest.join("\n")]
     return system
+  }
+
+  function extractKnowledgeReferences(messages: MessageV2.WithParts[]): string[] {
+    const refs: string[] = []
+    for (const msg of messages) {
+      if (msg.info.role !== "assistant" || !msg.info.summary) continue
+      for (const part of msg.parts) {
+        if (part.type !== "text") continue
+        // Parse <knowledge_references> block
+        const match = part.text.match(/<knowledge_references>([\s\S]*?)<\/knowledge_references>/i)
+        if (match) {
+          const paths = match[1]
+            .split("\n")
+            .map((p) => p.trim())
+            .filter((p) => p && p.endsWith(".md"))
+          refs.push(...paths)
+        }
+      }
+    }
+    return [...new Set(refs)]
   }
 
   async function resolveTools(input: {
