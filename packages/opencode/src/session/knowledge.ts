@@ -1,0 +1,430 @@
+import path from "path"
+import { Session } from "."
+import { Agent } from "../agent/agent"
+import { Identifier } from "../id/id"
+import { Instance } from "../project/instance"
+import { Log } from "../util/log"
+import { SessionPrompt } from "./prompt"
+import { Provider } from "../provider/provider"
+import { ProviderTransform } from "../provider/transform"
+import { generateText } from "ai"
+import { mergeDeep, pipe } from "remeda"
+import { Bus } from "../bus"
+import { MessageV2 } from "./message-v2"
+import { SessionTranscript } from "./transcript"
+import { Storage } from "../storage/storage"
+import z from "zod"
+import { fn } from "@/util/fn"
+
+export namespace SessionKnowledge {
+  const log = Log.create({ service: "session.knowledge" })
+
+  export const Event = {
+    Extracted: Bus.event(
+      "session.knowledge.extracted",
+      z.object({
+        sessionID: z.string(),
+        files: z.array(z.string()),
+      }),
+    ),
+  }
+
+  export interface KnowledgeFile {
+    path: string
+    summary?: string
+  }
+
+  export interface ExtractResult {
+    knowledgeFiles: KnowledgeFile[]
+    hasSubstantialKnowledge: boolean
+    childSessionID: string
+  }
+
+  /**
+   * Create an extraction part - triggers extraction in the prompt loop.
+   * This follows the same pattern as SessionCompaction.create().
+   */
+  export const create = fn(
+    z.object({
+      sessionID: Identifier.schema("session"),
+      agent: z.string(),
+      model: z.object({
+        providerID: z.string(),
+        modelID: z.string(),
+      }),
+    }),
+    async (input) => {
+      const msg = await Session.updateMessage({
+        id: Identifier.ascending("message"),
+        role: "user",
+        model: input.model,
+        sessionID: input.sessionID,
+        agent: input.agent,
+        time: {
+          created: Date.now(),
+        },
+      })
+      await Session.updatePart({
+        id: Identifier.ascending("part"),
+        messageID: msg.id,
+        sessionID: msg.sessionID,
+        type: "extraction",
+        extraction: { status: "checking" },
+      })
+    },
+  )
+
+  /**
+   * Process extraction - called by the prompt loop when it detects an extraction part.
+   * This follows the same pattern as SessionCompaction.process().
+   */
+  export async function process(input: {
+    parentID: string
+    messages: MessageV2.WithParts[]
+    sessionID: string
+    model: {
+      providerID: string
+      modelID: string
+    }
+    agent: string
+    abort: AbortSignal
+  }): Promise<"continue" | "stop"> {
+    log.info("processing knowledge extraction", { sessionID: input.sessionID })
+
+    await ensureDirectories()
+
+    // Find the extraction part to update
+    let extractionPart: MessageV2.ExtractionPart | undefined
+    for (const msg of input.messages) {
+      const part = msg.parts.find((p) => p.type === "extraction") as MessageV2.ExtractionPart | undefined
+      if (part) {
+        extractionPart = part
+        break
+      }
+    }
+
+    if (!extractionPart) {
+      log.error("extraction part not found")
+      return "stop"
+    }
+
+    // Skip if already completed, skipped, or has files
+    if (extractionPart.extraction.status === "completed" || extractionPart.extraction.status === "skipped") {
+      log.info("extraction already processed", {
+        sessionID: input.sessionID,
+        status: extractionPart.extraction.status,
+      })
+      return "stop"
+    }
+
+    try {
+      // Update to checking status
+      await Session.updatePart({
+        ...extractionPart,
+        extraction: { status: "checking" },
+      })
+
+      // Write transcript
+      const dir = path.join(Instance.directory, ".opencode", "sess")
+      const transcriptPath = path.join(dir, `${input.sessionID}.md`)
+      await SessionTranscript.writeToFile(input.sessionID, transcriptPath)
+
+      // Check for new knowledge
+      const checkResult = await check({
+        transcriptPath,
+        model: input.model,
+      })
+
+      if (!checkResult.hasNewKnowledge) {
+        log.info("no new knowledge found", { sessionID: input.sessionID })
+        await Session.updatePart({
+          ...extractionPart,
+          extraction: { status: "skipped" },
+        })
+        return "stop"
+      }
+
+      // Update to extracting status
+      await Session.updatePart({
+        ...extractionPart,
+        extraction: { status: "extracting" },
+      })
+
+      // Run extraction
+      const result = await extract({
+        extractionPart,
+        sessionID: input.sessionID,
+        transcriptPath,
+        model: input.model,
+      })
+
+      // Update to completed status
+      await Session.updatePart({
+        ...extractionPart,
+        extraction: {
+          status: "completed",
+          childSessionID: result.childSessionID,
+          files: result.knowledgeFiles,
+        },
+      })
+
+      Bus.publish(Event.Extracted, {
+        sessionID: input.sessionID,
+        files: result.knowledgeFiles.map((f) => f.path),
+      })
+
+      return "stop"
+    } catch (error) {
+      log.error("extraction failed", { sessionID: input.sessionID, error })
+      // Mark as completed with empty files to prevent retrying
+      await Session.updatePart({
+        ...extractionPart,
+        extraction: {
+          status: "completed",
+          files: [],
+        },
+      })
+      return "stop"
+    }
+  }
+
+  export async function extract(input: {
+    extractionPart: MessageV2.ExtractionPart
+    sessionID: string
+    transcriptPath: string
+    model: { providerID: string; modelID: string }
+  }): Promise<ExtractResult> {
+    log.info("extracting knowledge", { sessionID: input.sessionID })
+
+    const agent = await Agent.get("knowledge-extractor")
+    if (!agent) {
+      log.error("knowledge-extractor agent not found")
+      return { knowledgeFiles: [], hasSubstantialKnowledge: false, childSessionID: "" }
+    }
+
+    const session = await Session.create({
+      parentID: input.sessionID,
+      title: `Knowledge extraction (@${agent.name} subagent)`,
+    })
+
+    // Subscribe to tool updates from child session
+    const summary: Array<{ tool: string; title?: string }> = []
+    const unsubscribe = Bus.subscribe(MessageV2.Event.PartUpdated, async (evt) => {
+      const part = evt.properties.part
+      if (part.sessionID !== session.id) return
+      if (part.type !== "tool") return
+      if (part.state.status !== "completed") return
+
+      const toolName = part.tool
+      const title = part.state.title || undefined
+
+      // Check if already in summary
+      const exists = summary.some((s) => s.tool === toolName && s.title === title)
+      if (!exists) {
+        summary.push({ tool: toolName, title })
+
+        // Fetch current part state to preserve status (don't use stale input.extractionPart)
+        const current = await Storage.read<MessageV2.ExtractionPart>([
+          "part",
+          input.extractionPart.messageID,
+          input.extractionPart.id,
+        ])
+        if (!current || current.type !== "extraction") return
+
+        // Update with current status preserved
+        await Session.updatePart({
+          ...current,
+          extraction: {
+            ...current.extraction,
+            summary: [...summary],
+          },
+        })
+      }
+    })
+
+    try {
+      const messageID = Identifier.ascending("message")
+      const prompt = buildExtractionPrompt(input.transcriptPath, input.sessionID)
+
+      const result = await SessionPrompt.prompt({
+        messageID,
+        sessionID: session.id,
+        model: input.model,
+        agent: agent.name,
+        tools: agent.tools,
+        parts: [{ type: "text", text: prompt }],
+      })
+
+      const text = result.parts.findLast((x) => x.type === "text")?.text ?? ""
+      const parsed = parseExtractionResult(text)
+      return { ...parsed, childSessionID: session.id }
+    } finally {
+      unsubscribe()
+    }
+  }
+
+  function buildExtractionPrompt(transcriptPath: string, sessionID: string): string {
+    return [
+      `Extract knowledge from the following session transcript.`,
+      ``,
+      `Transcript path: ${transcriptPath}`,
+      `Session ID: ${sessionID}`,
+      `Knowledge directory: ${path.join(Instance.directory, ".opencode", "knowledge")}`,
+      ``,
+      `Instructions:`,
+      `1. Read the transcript file`,
+      `2. Identify valuable, reusable knowledge`,
+      `3. Check existing knowledge files in .opencode/knowledge/`,
+      `4. Create new or merge into existing knowledge files`,
+      `5. Return structured result with KNOWLEDGE_RESULT format`,
+    ].join("\n")
+  }
+
+  function parseExtractionResult(text: string): Omit<ExtractResult, "childSessionID"> {
+    const match = text.match(
+      /KNOWLEDGE_RESULT:\s*\nfiles:\s*\[(.*?)\]\s*\nsubstantial:\s*(true|false)\s*\nfile_summaries:([\s\S]*?)(?:```|$)/s,
+    )
+    if (!match) {
+      log.warn("could not parse knowledge result", { text: text.slice(-500) })
+      return { knowledgeFiles: [], hasSubstantialKnowledge: false }
+    }
+
+    const filesStr = match[1].trim()
+    const filePaths = filesStr
+      ? filesStr
+          .split(",")
+          .map((f) => f.trim().replace(/^["']|["']$/g, ""))
+          .filter(Boolean)
+      : []
+
+    const substantial = match[2] === "true"
+
+    // Parse file_summaries section for per-file descriptions
+    const summariesSection = match[3] || ""
+    const summaryMap = new Map<string, string>()
+    const summaryLines = summariesSection.split("\n").filter((line) => line.trim().startsWith("-"))
+    for (const line of summaryLines) {
+      const summaryMatch = line.match(/^-\s*([^:]+):\s*(.+)$/)
+      if (summaryMatch) {
+        const filepath = summaryMatch[1].trim()
+        const summary = summaryMatch[2].trim()
+        summaryMap.set(filepath, summary)
+      }
+    }
+
+    const files: KnowledgeFile[] = filePaths.map((filepath) => ({
+      path: filepath,
+      summary: summaryMap.get(filepath),
+    }))
+
+    log.info("parsed knowledge result", { files, substantial })
+    return { knowledgeFiles: files, hasSubstantialKnowledge: substantial }
+  }
+
+  export async function list(): Promise<string[]> {
+    const knowledgeDir = path.join(Instance.directory, ".opencode", "knowledge")
+    const glob = new Bun.Glob("*.md")
+    const files = await Array.fromAsync(glob.scan({ cwd: knowledgeDir, absolute: true })).catch(() => [])
+    return files
+  }
+
+  export async function load(files: string[]): Promise<string[]> {
+    const contents = await Promise.all(
+      files.map(async (file) => {
+        const filepath = path.isAbsolute(file) ? file : path.join(Instance.directory, file)
+        const text = await Bun.file(filepath)
+          .text()
+          .catch(() => "")
+        if (!text) return ""
+        return `Knowledge from: ${filepath}\n${text}`
+      }),
+    )
+    return contents.filter(Boolean)
+  }
+
+  export interface CheckResult {
+    hasNewKnowledge: boolean
+  }
+
+  export async function check(input: {
+    transcriptPath: string
+    model: { providerID: string; modelID: string }
+  }): Promise<CheckResult> {
+    log.info("checking for new knowledge", { transcriptPath: input.transcriptPath })
+
+    const model =
+      (await Provider.getSmallModel(input.model.providerID)) ??
+      (await Provider.getModel(input.model.providerID, input.model.modelID))
+    const language = await Provider.getLanguage(model)
+
+    const transcript = await Bun.file(input.transcriptPath)
+      .text()
+      .catch(() => "")
+    if (!transcript) {
+      log.warn("could not read transcript for knowledge check")
+      return { hasNewKnowledge: false }
+    }
+
+    const existingFiles = await list()
+    const existingKnowledge = await load(existingFiles)
+
+    const options = pipe(
+      {},
+      mergeDeep(ProviderTransform.options(model, "knowledge-check")),
+      mergeDeep(ProviderTransform.smallOptions(model)),
+      mergeDeep(model.options),
+    )
+
+    const systemPrompt = `You determine if a conversation transcript contains new, valuable knowledge worth extracting.
+
+New knowledge includes:
+- Design decisions and architectural choices with rationale
+- Technical specifications, schemas, or protocols
+- Bug resolutions with root causes and solutions
+- Codebase patterns, conventions, or important file locations
+- User preferences or project-specific rules
+
+NOT new knowledge:
+- Information already captured in existing knowledge files
+- Step-by-step debugging logs or raw tool outputs
+- Routine operations or transient discussion
+- Generic information not specific to this project
+
+Respond with ONLY "true" or "false" - nothing else.`
+
+    const userPrompt =
+      existingKnowledge.length > 0
+        ? `Existing knowledge files:\n${existingKnowledge.join("\n\n---\n\n")}\n\n---\n\nSession transcript:\n${transcript}\n\nDoes this transcript contain valuable NEW knowledge not already in the existing files?`
+        : `Session transcript:\n${transcript}\n\nDoes this transcript contain valuable knowledge worth extracting?`
+
+    const result = await generateText({
+      model: language,
+      maxOutputTokens: model.capabilities.reasoning ? 500 : 10,
+      providerOptions: ProviderTransform.providerOptions(model.api.npm, model.providerID, options),
+      messages: [
+        { role: "system" as const, content: systemPrompt },
+        { role: "user" as const, content: userPrompt },
+      ],
+      headers: model.headers,
+    }).catch((err) => {
+      log.error("knowledge check failed", { error: err })
+      return undefined
+    })
+
+    if (!result) return { hasNewKnowledge: true } // err on side of extraction
+
+    const answer = result.text.toLowerCase().trim()
+    const hasNewKnowledge = answer === "true" || answer.startsWith("true")
+    log.info("knowledge check result", { hasNewKnowledge, answer })
+
+    return { hasNewKnowledge }
+  }
+
+  export async function ensureDirectories(): Promise<void> {
+    const sessDir = path.join(Instance.directory, ".opencode", "sess")
+    const knowledgeDir = path.join(Instance.directory, ".opencode", "knowledge")
+
+    await Bun.write(path.join(sessDir, ".gitkeep"), "")
+    await Bun.write(path.join(knowledgeDir, ".gitkeep"), "")
+  }
+}

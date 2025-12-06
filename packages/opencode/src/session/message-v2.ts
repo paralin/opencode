@@ -146,13 +146,48 @@ export namespace MessageV2 {
   })
   export type AgentPart = z.infer<typeof AgentPart>
 
+  export const ExtractionStatus = z
+    .object({
+      status: z.enum(["checking", "extracting", "skipped", "completed"]),
+      childSessionID: z.string().optional(),
+      files: z
+        .array(
+          z.object({
+            path: z.string(),
+            summary: z.string().optional(),
+          }),
+        )
+        .optional(),
+      summary: z
+        .array(
+          z.object({
+            tool: z.string(),
+            title: z.string().optional(),
+          }),
+        )
+        .optional(),
+    })
+    .meta({
+      ref: "ExtractionStatus",
+    })
+  export type ExtractionStatus = z.infer<typeof ExtractionStatus>
+
   export const CompactionPart = PartBase.extend({
     type: z.literal("compaction"),
     auto: z.boolean(),
+    extraction: ExtractionStatus.optional(),
   }).meta({
     ref: "CompactionPart",
   })
   export type CompactionPart = z.infer<typeof CompactionPart>
+
+  export const ExtractionPart = PartBase.extend({
+    type: z.literal("extraction"),
+    extraction: ExtractionStatus,
+  }).meta({
+    ref: "ExtractionPart",
+  })
+  export type ExtractionPart = z.infer<typeof ExtractionPart>
 
   export const SubtaskPart = PartBase.extend({
     type: z.literal("subtask"),
@@ -323,6 +358,7 @@ export namespace MessageV2 {
       AgentPart,
       RetryPart,
       CompactionPart,
+      ExtractionPart,
     ])
     .meta({
       ref: "Part",

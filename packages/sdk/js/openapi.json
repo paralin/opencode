@@ -1480,6 +1480,83 @@
         }
       }
     },
+    "/session/{id}/extract-knowledge": {
+      "post": {
+        "operationId": "session.extractKnowledge",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "description": "Session ID"
+          }
+        ],
+        "description": "Extract knowledge from the session",
+        "responses": {
+          "200": {
+            "description": "Knowledge extraction started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "providerID": {
+                    "type": "string"
+                  },
+                  "modelID": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "providerID",
+                  "modelID"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
     "/session/{id}/message": {
       "get": {
         "operationId": "session.messages",
@@ -4873,6 +4950,60 @@
         },
         "required": ["id", "sessionID", "messageID", "type", "attempt", "error", "time"]
       },
+      "ExtractionStatus": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "checking",
+              "extracting",
+              "skipped",
+              "completed"
+            ]
+          },
+          "childSessionID": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          "summary": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "tool": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "tool"
+              ]
+            }
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
       "CompactionPart": {
         "type": "object",
         "properties": {
@@ -4891,9 +5022,40 @@
           },
           "auto": {
             "type": "boolean"
+          },
+          "extraction": {
+            "$ref": "#/components/schemas/ExtractionStatus"
           }
         },
         "required": ["id", "sessionID", "messageID", "type", "auto"]
+      },
+      "ExtractionPart": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "sessionID": {
+            "type": "string"
+          },
+          "messageID": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "const": "extraction"
+          },
+          "extraction": {
+            "$ref": "#/components/schemas/ExtractionStatus"
+          }
+        },
+        "required": [
+          "id",
+          "sessionID",
+          "messageID",
+          "type",
+          "extraction"
+        ]
       },
       "Part": {
         "anyOf": [
@@ -4957,6 +5119,9 @@
           },
           {
             "$ref": "#/components/schemas/CompactionPart"
+          },
+          {
+            "$ref": "#/components/schemas/ExtractionPart"
           }
         ]
       },
@@ -5200,6 +5365,37 @@
           }
         },
         "required": ["type", "properties"]
+      },
+      "Event.session.knowledge.extracted": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "session.knowledge.extracted"
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "sessionID": {
+                "type": "string"
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "sessionID",
+              "files"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "properties"
+        ]
       },
       "Event.file.edited": {
         "type": "object",
@@ -5822,6 +6018,9 @@
             "$ref": "#/components/schemas/Event.session.compacted"
           },
           {
+            "$ref": "#/components/schemas/Event.session.knowledge.extracted"
+          },
+          {
             "$ref": "#/components/schemas/Event.file.edited"
           },
           {
@@ -6042,6 +6241,11 @@
           "session_compact": {
             "description": "Compact the session",
             "default": "<leader>c",
+            "type": "string"
+          },
+          "session_knowledge": {
+            "description": "Extract knowledge from the session",
+            "default": "<leader>k",
             "type": "string"
           },
           "messages_page_up": {
@@ -6927,6 +7131,17 @@
             },
             "additionalProperties": {
               "type": "boolean"
+            }
+          },
+          "knowledge": {
+            "description": "Knowledge system settings",
+            "type": "object",
+            "properties": {
+              "auto_load": {
+                "description": "Automatically load all knowledge files into system prompt. When false, only loads files explicitly referenced by the LLM.",
+                "default": false,
+                "type": "boolean"
+              }
             }
           },
           "enterprise": {

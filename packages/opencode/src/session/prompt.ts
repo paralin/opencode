@@ -19,6 +19,7 @@ import {
   jsonSchema,
 } from "ai"
 import { SessionCompaction } from "./compaction"
+import { SessionKnowledge } from "./knowledge"
 import { Instance } from "../project/instance"
 import { Bus } from "../bus"
 import { ProviderTransform } from "../provider/transform"
@@ -254,7 +255,7 @@ export namespace SessionPrompt {
       let lastUser: MessageV2.User | undefined
       let lastAssistant: MessageV2.Assistant | undefined
       let lastFinished: MessageV2.Assistant | undefined
-      let tasks: (MessageV2.CompactionPart | MessageV2.SubtaskPart)[] = []
+      let tasks: (MessageV2.CompactionPart | MessageV2.SubtaskPart | MessageV2.ExtractionPart)[] = []
       for (let i = msgs.length - 1; i >= 0; i--) {
         const msg = msgs[i]
         if (!lastUser && msg.info.role === "user") lastUser = msg.info as MessageV2.User
@@ -262,8 +263,21 @@ export namespace SessionPrompt {
         if (!lastFinished && msg.info.role === "assistant" && msg.info.finish)
           lastFinished = msg.info as MessageV2.Assistant
         if (lastUser && lastFinished) break
-        const task = msg.parts.filter((part) => part.type === "compaction" || part.type === "subtask")
-        if (task && !lastFinished) {
+        const task = msg.parts.filter(
+          (part): part is MessageV2.CompactionPart | MessageV2.SubtaskPart | MessageV2.ExtractionPart => {
+            if (part.type === "subtask") return true
+            if (part.type === "compaction") {
+              return (
+                !part.extraction || (part.extraction.status !== "completed" && part.extraction.status !== "skipped")
+              )
+            }
+            if (part.type === "extraction") {
+              return part.extraction.status !== "completed" && part.extraction.status !== "skipped"
+            }
+            return false
+          },
+        )
+        if (task.length > 0 && !lastFinished) {
           tasks.push(...task)
         }
       }
@@ -414,6 +428,23 @@ export namespace SessionPrompt {
           },
           sessionID,
           auto: task.auto,
+        })
+        if (result === "stop") break
+        continue
+      }
+
+      // pending extraction
+      if (task?.type === "extraction") {
+        const result = await SessionKnowledge.process({
+          messages: msgs,
+          parentID: lastUser.id,
+          abort,
+          agent: lastUser.agent,
+          model: {
+            providerID: model.providerID,
+            modelID: model.id,
+          },
+          sessionID,
         })
         if (result === "stop") break
         continue
@@ -668,6 +699,7 @@ export namespace SessionPrompt {
     )
     system.push(...(await SystemPrompt.environment()))
     system.push(...(await SystemPrompt.custom()))
+    system.push(...(await SystemPrompt.knowledge()))
 
     if (input.isLastStep) {
       system.push(MAX_STEPS)

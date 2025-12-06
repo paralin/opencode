@@ -85,6 +85,9 @@ import type {
   SessionSummarizeData,
   SessionSummarizeResponses,
   SessionSummarizeErrors,
+  SessionExtractKnowledgeData,
+  SessionExtractKnowledgeResponses,
+  SessionExtractKnowledgeErrors,
   SessionMessagesData,
   SessionMessagesResponses,
   SessionMessagesErrors,
@@ -575,6 +578,26 @@ class Session extends _HeyApiClient {
   public summarize<ThrowOnError extends boolean = false>(options: Options<SessionSummarizeData, ThrowOnError>) {
     return (options.client ?? this._client).post<SessionSummarizeResponses, SessionSummarizeErrors, ThrowOnError>({
       url: "/session/{id}/summarize",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+
+  /**
+   * Extract knowledge from the session
+   */
+  public extractKnowledge<ThrowOnError extends boolean = false>(
+    options: Options<SessionExtractKnowledgeData, ThrowOnError>,
+  ) {
+    return (options.client ?? this._client).post<
+      SessionExtractKnowledgeResponses,
+      SessionExtractKnowledgeErrors,
+      ThrowOnError
+    >({
+      url: "/session/{id}/extract-knowledge",
       ...options,
       headers: {
         "Content-Type": "application/json",

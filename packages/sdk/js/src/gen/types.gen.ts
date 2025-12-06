@@ -373,12 +373,34 @@ export type RetryPart = {
   }
 }
 
+export type ExtractionStatus = {
+  status: "checking" | "extracting" | "skipped" | "completed"
+  childSessionID?: string
+  files?: Array<{
+    path: string
+    summary?: string
+  }>
+  summary?: Array<{
+    tool: string
+    title?: string
+  }>
+}
+
 export type CompactionPart = {
   id: string
   sessionID: string
   messageID: string
   type: "compaction"
   auto: boolean
+  extraction?: ExtractionStatus
+}
+
+export type ExtractionPart = {
+  id: string
+  sessionID: string
+  messageID: string
+  type: "extraction"
+  extraction: ExtractionStatus
 }
 
 export type Part =
@@ -402,6 +424,7 @@ export type Part =
   | AgentPart
   | RetryPart
   | CompactionPart
+  | ExtractionPart
 
 export type EventMessagePartUpdated = {
   type: "message.part.updated"
@@ -483,6 +506,14 @@ export type EventSessionCompacted = {
   type: "session.compacted"
   properties: {
     sessionID: string
+  }
+}
+
+export type EventSessionKnowledgeExtracted = {
+  type: "session.knowledge.extracted"
+  properties: {
+    sessionID: string
+    files: Array<string>
   }
 }
 
@@ -716,6 +747,7 @@ export type Event =
   | EventSessionStatus
   | EventSessionIdle
   | EventSessionCompacted
+  | EventSessionKnowledgeExtracted
   | EventFileEdited
   | EventTodoUpdated
   | EventCommandExecuted
@@ -834,6 +866,10 @@ export type KeybindsConfig = {
    * Compact the session
    */
   session_compact?: string
+  /**
+   * Extract knowledge from the session
+   */
+  session_knowledge?: string
   /**
    * Scroll messages up by one page
    */
@@ -1293,6 +1329,15 @@ export type Config = {
   }
   tools?: {
     [key: string]: boolean
+  }
+  /**
+   * Knowledge system settings
+   */
+  knowledge?: {
+    /**
+     * Automatically load all knowledge files into system prompt. When false, only loads files explicitly referenced by the LLM.
+     */
+    auto_load?: boolean
   }
   enterprise?: {
     /**
@@ -2484,6 +2529,45 @@ export type SessionSummarizeResponses = {
 }
 
 export type SessionSummarizeResponse = SessionSummarizeResponses[keyof SessionSummarizeResponses]
+
+export type SessionExtractKnowledgeData = {
+  body?: {
+    providerID: string
+    modelID: string
+  }
+  path: {
+    /**
+     * Session ID
+     */
+    id: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/session/{id}/extract-knowledge"
+}
+
+export type SessionExtractKnowledgeErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type SessionExtractKnowledgeError = SessionExtractKnowledgeErrors[keyof SessionExtractKnowledgeErrors]
+
+export type SessionExtractKnowledgeResponses = {
+  /**
+   * Knowledge extraction started
+   */
+  200: boolean
+}
+
+export type SessionExtractKnowledgeResponse = SessionExtractKnowledgeResponses[keyof SessionExtractKnowledgeResponses]
 
 export type SessionMessagesData = {
   body?: never

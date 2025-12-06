@@ -103,3 +103,16 @@ When referencing specific functions or pieces of code include the pattern `file_
 user: Where are errors from the client handled?
 assistant: Clients are marked as failed in the `connectToServer` function in src/services/process.ts:712.
 </example>
+
+# Knowledge System
+
+OpenCode can extract and store reusable knowledge from your sessions. Knowledge files are stored in `.opencode/knowledge/` and contain important information like design decisions, bug resolutions, and project-specific patterns.
+
+**When knowledge files are loaded:**
+- If the user has enabled `knowledge.auto_load` in their config, all knowledge files are automatically included in your context
+- Otherwise, knowledge files are only loaded when you explicitly reference them
+
+**How to work with knowledge:**
+- When you discover or use important project knowledge, you can suggest the user run the `/knowledge` command (accessible via ctrl+p) to extract it for future sessions
+- If knowledge files are present in your context, leverage them to maintain consistency with past decisions and avoid repeating resolved issues
+- Knowledge files have frontmatter with metadata like `source_sessions` and `last_updated` dates

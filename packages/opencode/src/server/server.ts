@@ -43,6 +43,7 @@ import { Snapshot } from "@/snapshot"
 import { SessionSummary } from "@/session/summary"
 import { GlobalBus } from "@/bus/global"
 import { SessionStatus } from "@/session/status"
+import { SessionKnowledge } from "@/session/knowledge"
 import { upgradeWebSocket, websocket } from "hono/bun"
 import { errors } from "./error"
 import { Pty } from "@/pty"
@@ -978,6 +979,60 @@ export namespace Server {
               modelID: body.modelID,
             },
             auto: false,
+          })
+          await SessionPrompt.loop(id)
+          return c.json(true)
+        },
+      )
+      .post(
+        "/session/:id/extract-knowledge",
+        describeRoute({
+          description: "Extract knowledge from the session",
+          operationId: "session.extractKnowledge",
+          responses: {
+            200: {
+              description: "Knowledge extraction started",
+              content: {
+                "application/json": {
+                  schema: resolver(z.boolean()),
+                },
+              },
+            },
+            ...errors(400, 404),
+          },
+        }),
+        validator(
+          "param",
+          z.object({
+            id: z.string().meta({ description: "Session ID" }),
+          }),
+        ),
+        validator(
+          "json",
+          z.object({
+            providerID: z.string(),
+            modelID: z.string(),
+          }),
+        ),
+        async (c) => {
+          const id = c.req.valid("param").id
+          const body = c.req.valid("json")
+          const msgs = await Session.messages({ sessionID: id })
+          let currentAgent = "build"
+          for (let i = msgs.length - 1; i >= 0; i--) {
+            const info = msgs[i].info
+            if (info.role === "user") {
+              currentAgent = info.agent || "build"
+              break
+            }
+          }
+          await SessionKnowledge.create({
+            sessionID: id,
+            agent: currentAgent,
+            model: {
+              providerID: body.providerID,
+              modelID: body.modelID,
+            },
           })
           await SessionPrompt.loop(id)
           return c.json(true)

@@ -25,7 +25,16 @@ import {
   type ScrollAcceleration,
 } from "@opentui/core"
 import { Prompt, type PromptRef } from "@tui/component/prompt"
-import type { AssistantMessage, Part, ToolPart, UserMessage, TextPart, ReasoningPart } from "@opencode-ai/sdk"
+import type {
+  AssistantMessage,
+  Part,
+  ToolPart,
+  UserMessage,
+  TextPart,
+  ReasoningPart,
+  ExtractionPart,
+  CompactionPart,
+} from "@opencode-ai/sdk"
 import { useLocal } from "@tui/context/local"
 import { Locale } from "@/util/locale"
 import type { Tool } from "@/tool/tool"
@@ -64,6 +73,8 @@ import { Editor } from "../../util/editor"
 import stripAnsi from "strip-ansi"
 import { Footer } from "./footer.tsx"
 import { usePromptRef } from "../../context/prompt"
+import "opentui-spinner/solid"
+import { createColors, createFrames } from "../../ui/spinner.ts"
 
 addDefaultParsers(parsers.parsers)
 
@@ -242,34 +253,6 @@ export function Session() {
 
   const command = useCommandDialog()
   command.register(() => [
-    ...(sync.data.config.share !== "disabled"
-      ? [
-          {
-            title: "Share session",
-            value: "session.share",
-            suggested: route.type === "session",
-            keybind: "session_share" as const,
-            disabled: !!session()?.share?.url,
-            category: "Session",
-            onSelect: async (dialog: any) => {
-              await sdk.client.session
-                .share({
-                  path: {
-                    id: route.sessionID,
-                  },
-                })
-                .then((res) =>
-                  Clipboard.copy(res.data!.share!.url).catch(() =>
-                    toast.show({ message: "Failed to copy URL to clipboard", variant: "error" }),
-                  ),
-                )
-                .then(() => toast.show({ message: "Share URL copied to clipboard!", variant: "success" }))
-                .catch(() => toast.show({ message: "Failed to share session", variant: "error" }))
-              dialog.clear()
-            },
-          },
-        ]
-      : []),
     {
       title: "Rename session",
       value: "session.rename",
@@ -325,6 +308,68 @@ export function Session() {
         dialog.clear()
       },
     },
+    {
+      title: "Extract knowledge",
+      value: "session.knowledge",
+      keybind: "session_knowledge",
+      category: "Session",
+      onSelect: async (dialog) => {
+        const model = local.model.current()
+        if (!model) {
+          toast.show({
+            variant: "warning",
+            message: "Connect a provider to extract knowledge",
+            duration: 3000,
+          })
+          return
+        }
+
+        dialog.clear()
+
+        try {
+          await sdk.client.session.extractKnowledge({
+            path: {
+              id: route.sessionID,
+            },
+            body: {
+              providerID: model.providerID,
+              modelID: model.modelID,
+            },
+          })
+        } catch (error) {
+          const { FormatError, FormatUnknownError } = await import("@/cli/error")
+          const message = FormatError(error) ?? FormatUnknownError(error)
+          toast.show({ message, variant: "error", duration: 6000 })
+        }
+      },
+    },
+    ...(sync.data.config.share !== "disabled"
+      ? [
+          {
+            title: "Share session",
+            value: "session.share",
+            keybind: "session_share" as const,
+            disabled: !!session()?.share?.url,
+            category: "Session",
+            onSelect: async (dialog: any) => {
+              await sdk.client.session
+                .share({
+                  path: {
+                    id: route.sessionID,
+                  },
+                })
+                .then((res) =>
+                  Clipboard.copy(res.data!.share!.url).catch(() =>
+                    toast.show({ message: "Failed to copy URL to clipboard", variant: "error" }),
+                  ),
+                )
+                .then(() => toast.show({ message: "Share URL copied to clipboard!", variant: "success" }))
+                .catch(() => toast.show({ message: "Failed to share session", variant: "error" }))
+              dialog.clear()
+            },
+          },
+        ]
+      : []),
     {
       title: "Unshare session",
       value: "session.unshare",
@@ -450,7 +495,7 @@ export function Session() {
       },
     },
     {
-      title: showTimestamps() ? "Hide timestamps" : "Show timestamps",
+      title: "Toggle timestamps",
       value: "session.toggle.timestamps",
       category: "Session",
       onSelect: (dialog) => {
@@ -1019,11 +1064,31 @@ function UserMessage(props: {
   const queued = createMemo(() => props.pending && props.message.id > props.pending)
   const color = createMemo(() => (queued() ? theme.accent : local.agent.color(props.message.agent)))
 
-  const compaction = createMemo(() => props.parts.find((x) => x.type === "compaction"))
+  const isCompactionPart = (part: Part): part is CompactionPart => part.type === "compaction"
+  const isExtractionPart = (part: Part): part is ExtractionPart => part.type === "extraction"
+
+  const compaction = createMemo(() => props.parts.find(isCompactionPart))
+
+  const extraction = createMemo(() => props.parts.find(isExtractionPart))
+
+  const spinnerDef = createMemo(() => ({
+    frames: createFrames({
+      color: theme.accent,
+      style: "blocks",
+      inactiveFactor: 0.6,
+      minAlpha: 0.3,
+    }),
+    color: createColors({
+      color: theme.accent,
+      style: "blocks",
+      inactiveFactor: 0.6,
+      minAlpha: 0.3,
+    }),
+  }))
 
   return (
     <>
-      <Show when={text()}>
+      <Show when={text() || extraction()}>
         <box
           id={props.message.id}
           border={["left"]}
@@ -1031,57 +1096,58 @@ function UserMessage(props: {
           customBorderChars={SplitBorder.customBorderChars}
           marginTop={props.index === 0 ? 0 : 1}
         >
-          <box
-            onMouseOver={() => {
-              setHover(true)
-            }}
-            onMouseOut={() => {
-              setHover(false)
-            }}
-            onMouseUp={props.onMouseUp}
-            paddingTop={1}
-            paddingBottom={1}
-            paddingLeft={2}
-            backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
-            flexShrink={0}
-          >
-            <text fg={theme.text}>{text()?.text}</text>
-            <Show when={files().length}>
-              <box flexDirection="row" paddingBottom={1} paddingTop={1} gap={1} flexWrap="wrap">
-                <For each={files()}>
-                  {(file) => {
-                    const bg = createMemo(() => {
-                      if (file.mime.startsWith("image/")) return theme.accent
-                      if (file.mime === "application/pdf") return theme.primary
-                      return theme.secondary
-                    })
-                    return (
-                      <text fg={theme.text}>
-                        <span style={{ bg: bg(), fg: theme.background }}> {MIME_BADGE[file.mime] ?? file.mime} </span>
-                        <span style={{ bg: theme.backgroundElement, fg: theme.textMuted }}> {file.filename} </span>
-                      </text>
-                    )
-                  }}
-                </For>
-              </box>
-            </Show>
-            <text fg={theme.textMuted}>
-              {ctx.usernameVisible() ? `${sync.data.config.username ?? "You"}` : "You"}
-              <Show
-                when={queued()}
-                fallback={
-                  <span style={{ fg: theme.textMuted }}>
-                    {ctx.usernameVisible() ? " · " : " "}
-                    {ctx.showTimestamps()
-                      ? Locale.todayTimeOrDateTime(props.message.time.created)
-                      : Locale.time(props.message.time.created)}
-                  </span>
-                }
-              >
-                <span style={{ bg: theme.accent, fg: theme.backgroundPanel, bold: true }}> QUEUED </span>
+          <Show when={text()}>
+            <box
+              onMouseOver={() => {
+                setHover(true)
+              }}
+              onMouseOut={() => {
+                setHover(false)
+              }}
+              onMouseUp={props.onMouseUp}
+              paddingTop={1}
+              paddingBottom={1}
+              paddingLeft={2}
+              backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
+              flexShrink={0}
+            >
+              <text fg={theme.text}>{text()?.text}</text>
+              <Show when={files().length}>
+                <box flexDirection="row" paddingBottom={1} paddingTop={1} gap={1} flexWrap="wrap">
+                  <For each={files()}>
+                    {(file) => {
+                      const bg = createMemo(() => {
+                        if (file.mime.startsWith("image/")) return theme.accent
+                        if (file.mime === "application/pdf") return theme.primary
+                        return theme.secondary
+                      })
+                      return (
+                        <text fg={theme.text}>
+                          <span style={{ bg: bg(), fg: theme.background }}> {MIME_BADGE[file.mime] ?? file.mime} </span>
+                          <span style={{ bg: theme.backgroundElement, fg: theme.textMuted }}> {file.filename} </span>
+                        </text>
+                      )
+                    }}
+                  </For>
+                </box>
               </Show>
-            </text>
-          </box>
+              <text fg={theme.textMuted}>
+                {ctx.usernameVisible() ? `${sync.data.config.username ?? "You"} ` : "You"}{" "}
+                <Show
+                  when={queued()}
+                  fallback={
+                    <span style={{ fg: theme.textMuted }}>
+                      {ctx.showTimestamps()
+                        ? Locale.todayTimeOrDateTime(props.message.time.created)
+                        : Locale.time(props.message.time.created)}
+                    </span>
+                  }
+                >
+                  <span style={{ bg: theme.accent, fg: theme.backgroundPanel, bold: true }}> QUEUED </span>
+                </Show>
+              </text>
+            </box>
+          </Show>
         </box>
       </Show>
       <Show when={compaction()}>
@@ -1091,7 +1157,134 @@ function UserMessage(props: {
           title=" Compaction "
           titleAlignment="center"
           borderColor={theme.borderActive}
-        />
+        >
+          <Show when={compaction()?.extraction?.status === "checking"}>
+            <box flexDirection="row" gap={1} paddingLeft={1} paddingTop={1}>
+              {/* @ts-ignore */}
+              <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
+              <text fg={theme.textMuted}>Checking for new knowledge...</text>
+            </box>
+          </Show>
+          <Show when={compaction()?.extraction?.status === "extracting"}>
+            <box paddingLeft={1} paddingTop={1}>
+              <box flexDirection="row" gap={1}>
+                {/* @ts-ignore */}
+                <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
+                <text fg={theme.textMuted}>Extracting knowledge...</text>
+              </box>
+              <Show when={compaction()?.extraction?.summary?.length}>
+                <box>
+                  <For each={compaction()!.extraction!.summary!}>
+                    {(item) => (
+                      <text fg={theme.textMuted}>
+                        ∟ {Locale.titlecase(item.tool)} {item.title ?? ""}
+                      </text>
+                    )}
+                  </For>
+                </box>
+              </Show>
+            </box>
+          </Show>
+          <Show when={compaction()?.extraction?.status === "skipped"}>
+            <box paddingLeft={1} paddingTop={1}>
+              <text fg={theme.textMuted}>No new knowledge found</text>
+            </box>
+          </Show>
+          <Show
+            when={
+              compaction()?.extraction?.status === "completed" && (compaction()?.extraction?.files?.length ?? 0) === 0
+            }
+          >
+            <box paddingLeft={1} paddingTop={1}>
+              <text fg={theme.textMuted}>No substantial knowledge extracted</text>
+            </box>
+          </Show>
+          <Show
+            when={
+              compaction()?.extraction?.status === "completed" && (compaction()?.extraction?.files?.length ?? 0) > 0
+            }
+          >
+            <box paddingLeft={1} paddingTop={1}>
+              <text fg={theme.textMuted}>Extracted {compaction()!.extraction!.files!.length} knowledge file(s)</text>
+              <For each={compaction()!.extraction!.files!.filter((f) => f?.path)}>
+                {(file) => (
+                  <text fg={theme.textMuted}>
+                    ∟ {file.path.replace(/^\.opencode\/knowledge\//, "").replace(/\.md$/, "")}
+                    {file.summary ? `: ${file.summary}` : ""}
+                  </text>
+                )}
+              </For>
+            </box>
+          </Show>
+        </box>
+      </Show>
+      <Show when={extraction()}>
+        <box
+          marginTop={1}
+          border={["top"]}
+          title=" Knowledge Extraction "
+          titleAlignment="center"
+          borderColor={theme.borderActive}
+        >
+          <Show when={extraction()?.extraction?.status === "checking"}>
+            <box flexDirection="row" gap={1} paddingLeft={1} paddingTop={1}>
+              {/* @ts-ignore */}
+              <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
+              <text fg={theme.textMuted}>Checking for new knowledge...</text>
+            </box>
+          </Show>
+          <Show when={extraction()?.extraction?.status === "extracting"}>
+            <box paddingLeft={1} paddingTop={1}>
+              <box flexDirection="row" gap={1}>
+                {/* @ts-ignore */}
+                <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
+                <text fg={theme.textMuted}>Extracting knowledge...</text>
+              </box>
+              <Show when={extraction()?.extraction?.summary?.length}>
+                <box>
+                  <For each={extraction()!.extraction!.summary!}>
+                    {(item) => (
+                      <text fg={theme.textMuted}>
+                        ∟ {Locale.titlecase(item.tool)} {item.title ?? ""}
+                      </text>
+                    )}
+                  </For>
+                </box>
+              </Show>
+            </box>
+          </Show>
+          <Show when={extraction()?.extraction?.status === "skipped"}>
+            <box paddingLeft={1} paddingTop={1}>
+              <text fg={theme.textMuted}>No new knowledge found</text>
+            </box>
+          </Show>
+          <Show
+            when={
+              extraction()?.extraction?.status === "completed" && (extraction()?.extraction?.files?.length ?? 0) === 0
+            }
+          >
+            <box paddingLeft={1} paddingTop={1}>
+              <text fg={theme.textMuted}>No substantial knowledge extracted</text>
+            </box>
+          </Show>
+          <Show
+            when={
+              extraction()?.extraction?.status === "completed" && (extraction()?.extraction?.files?.length ?? 0) > 0
+            }
+          >
+            <box paddingLeft={1} paddingTop={1}>
+              <text fg={theme.textMuted}>Extracted {extraction()!.extraction!.files!.length} knowledge file(s)</text>
+              <For each={extraction()!.extraction!.files!.filter((f) => f?.path)}>
+                {(file) => (
+                  <text fg={theme.textMuted}>
+                    ∟ {file.path.replace(/^\.opencode\/knowledge\//, "").replace(/\.md$/, "")}
+                    {file.summary ? `: ${file.summary}` : ""}
+                  </text>
+                )}
+              </For>
+            </box>
+          </Show>
+        </box>
       </Show>
     </>
   )
@@ -1524,7 +1717,7 @@ ToolRegistry.register<typeof TaskTool>({
           <box>
             <For each={props.metadata.summary ?? []}>
               {(task) => (
-                <text style={{ fg: task.state.status === "error" ? theme.error : theme.textMuted }}>
+                <text style={{ fg: theme.textMuted }}>
                   ∟ {Locale.titlecase(task.tool)} {task.state.status === "completed" ? task.state.title : ""}
                 </text>
               )}

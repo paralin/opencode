@@ -172,6 +172,10 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           const messages = store.message[event.properties.info.sessionID]
           if (!messages) {
             setStore("message", event.properties.info.sessionID, [event.properties.info])
+            // Initialize parts array to ensure reactivity when parts are added later
+            if (!store.part[event.properties.info.id]) {
+              setStore("part", event.properties.info.id, [])
+            }
             break
           }
           const result = Binary.search(messages, event.properties.info.id, (m) => m.id)
@@ -187,6 +191,10 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               if (draft.length > 100) draft.shift()
             }),
           )
+          // Initialize parts array for new messages to ensure reactivity
+          if (!store.part[event.properties.info.id]) {
+            setStore("part", event.properties.info.id, [])
+          }
           break
         }
         case "message.removed": {

@@ -415,6 +415,7 @@ export namespace Config {
       session_unshare: z.string().optional().default("none").describe("Unshare current session"),
       session_interrupt: z.string().optional().default("escape").describe("Interrupt current session"),
       session_compact: z.string().optional().default("<leader>c").describe("Compact the session"),
+      session_knowledge: z.string().optional().default("<leader>k").describe("Extract knowledge from the session"),
       messages_page_up: z.string().optional().default("pageup").describe("Scroll messages up by one page"),
       messages_page_down: z.string().optional().default("pagedown").describe("Scroll messages down by one page"),
       messages_half_page_up: z.string().optional().default("ctrl+alt+u").describe("Scroll messages up by half page"),
@@ -645,6 +646,18 @@ export namespace Config {
         })
         .optional(),
       tools: z.record(z.string(), z.boolean()).optional(),
+      knowledge: z
+        .object({
+          auto_load: z
+            .boolean()
+            .optional()
+            .default(false)
+            .describe(
+              "Automatically load all knowledge files into system prompt. When false, only loads files explicitly referenced by the LLM.",
+            ),
+        })
+        .optional()
+        .describe("Knowledge system settings"),
       enterprise: z
         .object({
           url: z.string().optional().describe("Enterprise URL"),

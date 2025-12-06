@@ -212,6 +212,11 @@ export function Autocomplete(props: {
           onSelect: () => command.trigger("session.compact"),
         },
         {
+          display: "/knowledge",
+          description: "extract knowledge from the session",
+          onSelect: () => command.trigger("session.knowledge"),
+        },
+        {
           display: "/unshare",
           disabled: !s.share,
           description: "unshare a session",
