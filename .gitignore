@@ -23,8 +23,6 @@ a.out
 target
 .scripts
 .direnv/
-
-# Local dev files
 opencode-dev
 UPCOMING_CHANGELOG.md
 logs/
