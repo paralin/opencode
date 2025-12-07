@@ -2518,6 +2518,45 @@ export type SessionSummarizeResponses = {
 
 export type SessionSummarizeResponse = SessionSummarizeResponses[keyof SessionSummarizeResponses]
 
+export type SessionKnowledgeData = {
+  body?: {
+    providerID: string
+    modelID: string
+  }
+  path: {
+    /**
+     * Session ID
+     */
+    id: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/session/{id}/knowledge"
+}
+
+export type SessionKnowledgeErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type SessionKnowledgeError = SessionKnowledgeErrors[keyof SessionKnowledgeErrors]
+
+export type SessionKnowledgeResponses = {
+  /**
+   * Knowledge extraction initiated
+   */
+  200: boolean
+}
+
+export type SessionKnowledgeResponse = SessionKnowledgeResponses[keyof SessionKnowledgeResponses]
+
 export type SessionMessagesData = {
   body?: never
   path: {

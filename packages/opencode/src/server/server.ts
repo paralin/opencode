@@ -1,5 +1,7 @@
 import { Log } from "../util/log"
 import { Bus } from "../bus"
+import path from "path"
+import { Identifier } from "../id/id"
 import { describeRoute, generateSpecs, validator, resolver, openAPIRouteHandler } from "hono-openapi"
 import { Hono } from "hono"
 import { cors } from "hono/cors"
@@ -979,6 +981,113 @@ export namespace Server {
             },
             auto: false,
           })
+          await SessionPrompt.loop(id)
+          return c.json(true)
+        },
+      )
+      .post(
+        "/session/:id/knowledge",
+        describeRoute({
+          description: "Extract knowledge from the session",
+          operationId: "session.knowledge",
+          responses: {
+            200: {
+              description: "Knowledge extraction initiated",
+              content: {
+                "application/json": {
+                  schema: resolver(z.boolean()),
+                },
+              },
+            },
+            ...errors(400, 404),
+          },
+        }),
+        validator(
+          "param",
+          z.object({
+            id: z.string().meta({ description: "Session ID" }),
+          }),
+        ),
+        validator(
+          "json",
+          z.object({
+            providerID: z.string(),
+            modelID: z.string(),
+          }),
+        ),
+        async (c) => {
+          const id = c.req.valid("param").id
+          const body = c.req.valid("json")
+          const msgs = await Session.messages({ sessionID: id })
+          let currentAgent = "build"
+          for (let i = msgs.length - 1; i >= 0; i--) {
+            const info = msgs[i].info
+            if (info.role === "user") {
+              currentAgent = info.agent || "build"
+              break
+            }
+          }
+
+          const session = await Session.get(id)
+          const transcriptPath = path.join(Instance.directory, ".opencode", "sess", `${id}.md`)
+          await Bun.file(path.join(Instance.directory, ".opencode", "sess", ".gitkeep"))
+            .writer()
+            .end()
+
+          let transcript = `# ${session.title}\n\n`
+          transcript += `**Session ID:** ${session.id}\n`
+          transcript += `**Created:** ${new Date(session.time.created).toLocaleString()}\n\n---\n\n`
+
+          for (const msg of msgs) {
+            const role = msg.info.role === "user" ? "User" : "Assistant"
+            transcript += `## ${role}\n\n`
+            for (const part of msg.parts) {
+              if (part.type === "text" && !part.synthetic) {
+                transcript += `${part.text}\n\n`
+              } else if (part.type === "tool" && part.state.status === "completed") {
+                transcript += `\`\`\`\nTool: ${part.tool}\n\`\`\`\n\n`
+              }
+            }
+            transcript += `---\n\n`
+          }
+
+          await Bun.write(transcriptPath, transcript)
+
+          const knowledgeDir = path.join(Instance.directory, ".opencode", "knowledge")
+          await Bun.file(path.join(knowledgeDir, ".gitkeep")).writer().end()
+
+          const prompt = [
+            `Extract reusable knowledge from this session.`,
+            ``,
+            `Read transcript: ${transcriptPath}`,
+            `Write to: ${knowledgeDir}`,
+            ``,
+            `Extract ONLY: architectural decisions, non-obvious patterns, bug causes, project gotchas`,
+            `Skip: session logs, documented info, generic knowledge`,
+            `If nothing worth extracting: respond "No knowledge"`,
+            `Use kebab-case names, YAML frontmatter with dates and source_sessions`,
+            `Be conservative - most sessions have nothing to extract`,
+          ].join("\n")
+
+          const msg = await Session.updateMessage({
+            id: Identifier.ascending("message"),
+            role: "user",
+            model: { providerID: body.providerID, modelID: body.modelID },
+            sessionID: id,
+            agent: currentAgent,
+            time: { created: Date.now() },
+          })
+
+          await Session.updatePart({
+            id: Identifier.ascending("part"),
+            messageID: msg.id,
+            sessionID: msg.sessionID,
+            type: "subtask",
+            prompt,
+            description: "Extract knowledge",
+            agent: "knowledge-extractor",
+          })
+
           await SessionPrompt.loop(id)
           return c.json(true)
         },
