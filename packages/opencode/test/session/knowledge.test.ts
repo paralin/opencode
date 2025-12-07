@@ -33,9 +33,9 @@ describe("SessionKnowledge.create", () => {
         expect(extractionPart).toBeDefined()
         expect(extractionPart?.type).toBe("extraction")
 
-        // Should have initial checking status
+        // Extraction part should have empty extraction object (stateless - no status field)
         const part = extractionPart as MessageV2.ExtractionPart
-        expect(part.extraction.status).toBe("checking")
+        expect(part.extraction).toBeDefined()
 
         await Session.remove(session.id)
       },
@@ -80,34 +80,17 @@ describe("SessionKnowledge.create", () => {
 })
 
 describe("ExtractionPart schema", () => {
-  test("should require extraction field with status", () => {
+  test("should require extraction field", () => {
     const validPart = {
       id: "part_123",
       sessionID: "ses_123",
       messageID: "msg_123",
       type: "extraction" as const,
-      extraction: { status: "checking" as const },
+      extraction: {},
     }
 
     const result = MessageV2.ExtractionPart.safeParse(validPart)
     expect(result.success).toBe(true)
-  })
-
-  test("should accept all extraction statuses", () => {
-    const statuses = ["checking", "extracting", "skipped", "completed"] as const
-
-    for (const status of statuses) {
-      const part = {
-        id: "part_123",
-        sessionID: "ses_123",
-        messageID: "msg_123",
-        type: "extraction" as const,
-        extraction: { status },
-      }
-
-      const result = MessageV2.ExtractionPart.safeParse(part)
-      expect(result.success).toBe(true)
-    }
   })
 
   test("should accept extraction with optional fields", () => {
@@ -117,7 +100,6 @@ describe("ExtractionPart schema", () => {
       messageID: "msg_123",
       type: "extraction" as const,
       extraction: {
-        status: "completed" as const,
         childSessionID: "ses_child_123",
         files: [
           { path: ".opencode/knowledge/test.md", summary: "Test knowledge" },
@@ -129,19 +111,6 @@ describe("ExtractionPart schema", () => {
 
     const result = MessageV2.ExtractionPart.safeParse(part)
     expect(result.success).toBe(true)
-  })
-
-  test("should reject extraction without status", () => {
-    const part = {
-      id: "part_123",
-      sessionID: "ses_123",
-      messageID: "msg_123",
-      type: "extraction" as const,
-      extraction: {},
-    }
-
-    const result = MessageV2.ExtractionPart.safeParse(part)
-    expect(result.success).toBe(false)
   })
 
   test("should reject part without extraction field", () => {
@@ -158,27 +127,20 @@ describe("ExtractionPart schema", () => {
 })
 
 describe("ExtractionStatus schema", () => {
-  test("should validate minimal status", () => {
-    const status = { status: "checking" as const }
+  test("should validate empty status (stateless)", () => {
+    const status = {}
     const result = MessageV2.ExtractionStatus.safeParse(status)
     expect(result.success).toBe(true)
   })
 
-  test("should validate full status", () => {
+  test("should validate full status with all optional fields", () => {
     const status = {
-      status: "completed" as const,
       childSessionID: "ses_123",
       files: [{ path: "test.md", summary: "Summary" }],
       summary: [{ tool: "read", title: "Title" }],
     }
     const result = MessageV2.ExtractionStatus.safeParse(status)
     expect(result.success).toBe(true)
-  })
-
-  test("should reject invalid status value", () => {
-    const status = { status: "invalid" }
-    const result = MessageV2.ExtractionStatus.safeParse(status)
-    expect(result.success).toBe(false)
   })
 })
 

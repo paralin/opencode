@@ -5,10 +5,6 @@ import { Identifier } from "../id/id"
 import { Instance } from "../project/instance"
 import { Log } from "../util/log"
 import { SessionPrompt } from "./prompt"
-import { Provider } from "../provider/provider"
-import { ProviderTransform } from "../provider/transform"
-import { generateText } from "ai"
-import { mergeDeep, pipe } from "remeda"
 import { Bus } from "../bus"
 import { MessageV2 } from "./message-v2"
 import { SessionTranscript } from "./transcript"
@@ -36,13 +32,11 @@ export namespace SessionKnowledge {
 
   export interface ExtractResult {
     knowledgeFiles: KnowledgeFile[]
-    hasSubstantialKnowledge: boolean
     childSessionID: string
   }
 
   /**
    * Create an extraction part - triggers extraction in the prompt loop.
-   * This follows the same pattern as SessionCompaction.create().
    */
   export const create = fn(
     z.object({
@@ -69,14 +63,15 @@ export namespace SessionKnowledge {
         messageID: msg.id,
         sessionID: msg.sessionID,
         type: "extraction",
-        extraction: { status: "checking" },
+        extraction: {},
       })
     },
   )
 
   /**
    * Process extraction - called by the prompt loop when it detects an extraction part.
-   * This follows the same pattern as SessionCompaction.process().
+   * Stateless design: completion is determined by the prompt loop checking for an
+   * assistant message after the extraction part, not by a status field.
    */
   export async function process(input: {
     parentID: string
@@ -91,12 +86,11 @@ export namespace SessionKnowledge {
   }): Promise<"continue" | "stop"> {
     log.info("processing knowledge extraction", { sessionID: input.sessionID })
 
-    await ensureDirectories()
-
-    // Find the extraction part to update
+    // Find the extraction part
+    const isExtractionPart = (p: MessageV2.Part): p is MessageV2.ExtractionPart => p.type === "extraction"
     let extractionPart: MessageV2.ExtractionPart | undefined
     for (const msg of input.messages) {
-      const part = msg.parts.find((p) => p.type === "extraction") as MessageV2.ExtractionPart | undefined
+      const part = msg.parts.find(isExtractionPart)
       if (part) {
         extractionPart = part
         break
@@ -108,61 +102,33 @@ export namespace SessionKnowledge {
       return "stop"
     }
 
-    // Skip if already completed, skipped, or has files
-    if (extractionPart.extraction.status === "completed" || extractionPart.extraction.status === "skipped") {
-      log.info("extraction already processed", {
-        sessionID: input.sessionID,
-        status: extractionPart.extraction.status,
-      })
+    // Stateless pattern: Skip if extraction already completed (has childSessionID)
+    if (extractionPart.extraction.childSessionID) {
+      log.info("extraction already completed", { childSessionID: extractionPart.extraction.childSessionID })
       return "stop"
     }
 
+    await ensureDirectories()
+
+    // Write transcript
+    const dir = path.join(Instance.directory, ".opencode", "sess")
+    const transcriptPath = path.join(dir, `${input.sessionID}.md`)
+    await SessionTranscript.writeToFile(input.sessionID, transcriptPath)
+
+    // Run extraction agent with error handling
     try {
-      // Update to checking status
-      await Session.updatePart({
-        ...extractionPart,
-        extraction: { status: "checking" },
-      })
-
-      // Write transcript
-      const dir = path.join(Instance.directory, ".opencode", "sess")
-      const transcriptPath = path.join(dir, `${input.sessionID}.md`)
-      await SessionTranscript.writeToFile(input.sessionID, transcriptPath)
-
-      // Check for new knowledge
-      const checkResult = await check({
-        transcriptPath,
-        model: input.model,
-      })
-
-      if (!checkResult.hasNewKnowledge) {
-        log.info("no new knowledge found", { sessionID: input.sessionID })
-        await Session.updatePart({
-          ...extractionPart,
-          extraction: { status: "skipped" },
-        })
-        return "stop"
-      }
-
-      // Update to extracting status
-      await Session.updatePart({
-        ...extractionPart,
-        extraction: { status: "extracting" },
-      })
-
-      // Run extraction
       const result = await extract({
         extractionPart,
         sessionID: input.sessionID,
         transcriptPath,
         model: input.model,
+        abort: input.abort,
       })
 
-      // Update to completed status
+      // Update extraction part with final results (childSessionID already set in extract())
       await Session.updatePart({
         ...extractionPart,
         extraction: {
-          status: "completed",
           childSessionID: result.childSessionID,
           files: result.knowledgeFiles,
         },
@@ -172,39 +138,44 @@ export namespace SessionKnowledge {
         sessionID: input.sessionID,
         files: result.knowledgeFiles.map((f) => f.path),
       })
-
-      return "stop"
     } catch (error) {
-      log.error("extraction failed", { sessionID: input.sessionID, error })
-      // Mark as completed with empty files to prevent retrying
-      await Session.updatePart({
-        ...extractionPart,
-        extraction: {
-          status: "completed",
-          files: [],
-        },
-      })
-      return "stop"
+      log.error("extraction failed", { error, sessionID: input.sessionID })
+      // Child session ID is already set by extract(), marking it as attempted
+      // Files will remain empty, indicating failure
+      // User can check child session for details or manually retry with /knowledge
     }
+
+    return "stop"
   }
 
-  export async function extract(input: {
+  async function extract(input: {
     extractionPart: MessageV2.ExtractionPart
     sessionID: string
     transcriptPath: string
     model: { providerID: string; modelID: string }
+    abort: AbortSignal
   }): Promise<ExtractResult> {
     log.info("extracting knowledge", { sessionID: input.sessionID })
 
     const agent = await Agent.get("knowledge-extractor")
     if (!agent) {
-      log.error("knowledge-extractor agent not found")
-      return { knowledgeFiles: [], hasSubstantialKnowledge: false, childSessionID: "" }
+      const msg = "knowledge-extractor agent not found"
+      log.error(msg)
+      throw new Error(msg)
     }
 
     const session = await Session.create({
       parentID: input.sessionID,
       title: `Knowledge extraction (@${agent.name} subagent)`,
+    })
+
+    // Update parent extraction part with childSessionID immediately
+    // This prevents re-processing if the extraction fails or hangs
+    await Session.updatePart({
+      ...input.extractionPart,
+      extraction: {
+        childSessionID: session.id,
+      },
     })
 
     // Subscribe to tool updates from child session
@@ -218,12 +189,11 @@ export namespace SessionKnowledge {
       const toolName = part.tool
       const title = part.state.title || undefined
 
-      // Check if already in summary
       const exists = summary.some((s) => s.tool === toolName && s.title === title)
       if (!exists) {
         summary.push({ tool: toolName, title })
 
-        // Fetch current part state to preserve status (don't use stale input.extractionPart)
+        // Fetch current part state to preserve status
         const current = await Storage.read<MessageV2.ExtractionPart>([
           "part",
           input.extractionPart.messageID,
@@ -231,7 +201,6 @@ export namespace SessionKnowledge {
         ])
         if (!current || current.type !== "extraction") return
 
-        // Update with current status preserved
         await Session.updatePart({
           ...current,
           extraction: {
@@ -246,18 +215,29 @@ export namespace SessionKnowledge {
       const messageID = Identifier.ascending("message")
       const prompt = buildExtractionPrompt(input.transcriptPath, input.sessionID)
 
-      const result = await SessionPrompt.prompt({
-        messageID,
-        sessionID: session.id,
-        model: input.model,
-        agent: agent.name,
-        tools: agent.tools,
-        parts: [{ type: "text", text: prompt }],
-      })
+      // Set up abort handler to cancel child session
+      const abortHandler = () => {
+        log.info("aborting child session", { childSessionID: session.id })
+        SessionPrompt.cancel(session.id)
+      }
+      input.abort.addEventListener("abort", abortHandler)
 
-      const text = result.parts.findLast((x) => x.type === "text")?.text ?? ""
-      const parsed = parseExtractionResult(text)
-      return { ...parsed, childSessionID: session.id }
+      try {
+        const result = await SessionPrompt.prompt({
+          messageID,
+          sessionID: session.id,
+          model: input.model,
+          agent: agent.name,
+          tools: agent.tools,
+          parts: [{ type: "text", text: prompt }],
+        })
+
+        const text = result.parts.findLast((x) => x.type === "text")?.text ?? ""
+        const parsed = parseExtractionResult(text)
+        return { ...parsed, childSessionID: session.id }
+      } finally {
+        input.abort.removeEventListener("abort", abortHandler)
+      }
     } finally {
       unsubscribe()
     }
@@ -273,10 +253,11 @@ export namespace SessionKnowledge {
       ``,
       `Instructions:`,
       `1. Read the transcript file`,
-      `2. Identify valuable, reusable knowledge`,
-      `3. Check existing knowledge files in .opencode/knowledge/`,
-      `4. Create new or merge into existing knowledge files`,
-      `5. Return structured result with KNOWLEDGE_RESULT format`,
+      `2. Identify valuable, reusable knowledge (design decisions, bug resolutions, patterns)`,
+      `3. If no valuable knowledge is found, return empty result`,
+      `4. Check existing knowledge files in .opencode/knowledge/`,
+      `5. Create new or merge into existing knowledge files`,
+      `6. Return structured result with KNOWLEDGE_RESULT format`,
     ].join("\n")
   }
 
@@ -286,10 +267,18 @@ export namespace SessionKnowledge {
     )
     if (!match) {
       log.warn("could not parse knowledge result", { text: text.slice(-500) })
-      return { knowledgeFiles: [], hasSubstantialKnowledge: false }
+      return { knowledgeFiles: [] }
     }
 
     const filesStr = match[1].trim()
+    const substantial = match[2] === "true"
+
+    // If not substantial, return empty even if files were somehow listed
+    if (!substantial) {
+      log.info("no substantial knowledge found")
+      return { knowledgeFiles: [] }
+    }
+
     const filePaths = filesStr
       ? filesStr
           .split(",")
@@ -297,9 +286,7 @@ export namespace SessionKnowledge {
           .filter(Boolean)
       : []
 
-    const substantial = match[2] === "true"
-
-    // Parse file_summaries section for per-file descriptions
+    // Parse file_summaries section
     const summariesSection = match[3] || ""
     const summaryMap = new Map<string, string>()
     const summaryLines = summariesSection.split("\n").filter((line) => line.trim().startsWith("-"))
@@ -307,8 +294,8 @@ export namespace SessionKnowledge {
       const summaryMatch = line.match(/^-\s*([^:]+):\s*(.+)$/)
       if (summaryMatch) {
         const filepath = summaryMatch[1].trim()
-        const summary = summaryMatch[2].trim()
-        summaryMap.set(filepath, summary)
+        const desc = summaryMatch[2].trim()
+        summaryMap.set(filepath, desc)
       }
     }
 
@@ -318,13 +305,13 @@ export namespace SessionKnowledge {
     }))
 
     log.info("parsed knowledge result", { files, substantial })
-    return { knowledgeFiles: files, hasSubstantialKnowledge: substantial }
+    return { knowledgeFiles: files }
   }
 
   export async function list(): Promise<string[]> {
-    const knowledgeDir = path.join(Instance.directory, ".opencode", "knowledge")
+    const dir = path.join(Instance.directory, ".opencode", "knowledge")
     const glob = new Bun.Glob("*.md")
-    const files = await Array.fromAsync(glob.scan({ cwd: knowledgeDir, absolute: true })).catch(() => [])
+    const files = await Array.fromAsync(glob.scan({ cwd: dir, absolute: true })).catch(() => [])
     return files
   }
 
@@ -342,85 +329,7 @@ export namespace SessionKnowledge {
     return contents.filter(Boolean)
   }
 
-  export interface CheckResult {
-    hasNewKnowledge: boolean
-  }
-
-  export async function check(input: {
-    transcriptPath: string
-    model: { providerID: string; modelID: string }
-  }): Promise<CheckResult> {
-    log.info("checking for new knowledge", { transcriptPath: input.transcriptPath })
-
-    const model =
-      (await Provider.getSmallModel(input.model.providerID)) ??
-      (await Provider.getModel(input.model.providerID, input.model.modelID))
-    const language = await Provider.getLanguage(model)
-
-    const transcript = await Bun.file(input.transcriptPath)
-      .text()
-      .catch(() => "")
-    if (!transcript) {
-      log.warn("could not read transcript for knowledge check")
-      return { hasNewKnowledge: false }
-    }
-
-    const existingFiles = await list()
-    const existingKnowledge = await load(existingFiles)
-
-    const options = pipe(
-      {},
-      mergeDeep(ProviderTransform.options(model, "knowledge-check")),
-      mergeDeep(ProviderTransform.smallOptions(model)),
-      mergeDeep(model.options),
-    )
-
-    const systemPrompt = `You determine if a conversation transcript contains new, valuable knowledge worth extracting.
-
-New knowledge includes:
-- Design decisions and architectural choices with rationale
-- Technical specifications, schemas, or protocols
-- Bug resolutions with root causes and solutions
-- Codebase patterns, conventions, or important file locations
-- User preferences or project-specific rules
-
-NOT new knowledge:
-- Information already captured in existing knowledge files
-- Step-by-step debugging logs or raw tool outputs
-- Routine operations or transient discussion
-- Generic information not specific to this project
-
-Respond with ONLY "true" or "false" - nothing else.`
-
-    const userPrompt =
-      existingKnowledge.length > 0
-        ? `Existing knowledge files:\n${existingKnowledge.join("\n\n---\n\n")}\n\n---\n\nSession transcript:\n${transcript}\n\nDoes this transcript contain valuable NEW knowledge not already in the existing files?`
-        : `Session transcript:\n${transcript}\n\nDoes this transcript contain valuable knowledge worth extracting?`
-
-    const result = await generateText({
-      model: language,
-      maxOutputTokens: model.capabilities.reasoning ? 500 : 10,
-      providerOptions: ProviderTransform.providerOptions(model.api.npm, model.providerID, options),
-      messages: [
-        { role: "system" as const, content: systemPrompt },
-        { role: "user" as const, content: userPrompt },
-      ],
-      headers: model.headers,
-    }).catch((err) => {
-      log.error("knowledge check failed", { error: err })
-      return undefined
-    })
-
-    if (!result) return { hasNewKnowledge: true } // err on side of extraction
-
-    const answer = result.text.toLowerCase().trim()
-    const hasNewKnowledge = answer === "true" || answer.startsWith("true")
-    log.info("knowledge check result", { hasNewKnowledge, answer })
-
-    return { hasNewKnowledge }
-  }
-
-  export async function ensureDirectories(): Promise<void> {
+  async function ensureDirectories(): Promise<void> {
     const sessDir = path.join(Instance.directory, ".opencode", "sess")
     const knowledgeDir = path.join(Instance.directory, ".opencode", "knowledge")
 

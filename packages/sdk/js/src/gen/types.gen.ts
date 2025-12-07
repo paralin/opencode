@@ -374,7 +374,6 @@ export type RetryPart = {
 }
 
 export type ExtractionStatus = {
-  status: "checking" | "extracting" | "skipped" | "completed"
   childSessionID?: string
   files?: Array<{
     path: string

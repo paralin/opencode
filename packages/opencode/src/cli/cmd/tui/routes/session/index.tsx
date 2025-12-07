@@ -1157,66 +1157,7 @@ function UserMessage(props: {
           title=" Compaction "
           titleAlignment="center"
           borderColor={theme.borderActive}
-        >
-          <Show when={compaction()?.extraction?.status === "checking"}>
-            <box flexDirection="row" gap={1} paddingLeft={1} paddingTop={1}>
-              {/* @ts-ignore */}
-              <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
-              <text fg={theme.textMuted}>Checking for new knowledge...</text>
-            </box>
-          </Show>
-          <Show when={compaction()?.extraction?.status === "extracting"}>
-            <box paddingLeft={1} paddingTop={1}>
-              <box flexDirection="row" gap={1}>
-                {/* @ts-ignore */}
-                <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
-                <text fg={theme.textMuted}>Extracting knowledge...</text>
-              </box>
-              <Show when={compaction()?.extraction?.summary?.length}>
-                <box>
-                  <For each={compaction()!.extraction!.summary!}>
-                    {(item) => (
-                      <text fg={theme.textMuted}>
-                        ∟ {Locale.titlecase(item.tool)} {item.title ?? ""}
-                      </text>
-                    )}
-                  </For>
-                </box>
-              </Show>
-            </box>
-          </Show>
-          <Show when={compaction()?.extraction?.status === "skipped"}>
-            <box paddingLeft={1} paddingTop={1}>
-              <text fg={theme.textMuted}>No new knowledge found</text>
-            </box>
-          </Show>
-          <Show
-            when={
-              compaction()?.extraction?.status === "completed" && (compaction()?.extraction?.files?.length ?? 0) === 0
-            }
-          >
-            <box paddingLeft={1} paddingTop={1}>
-              <text fg={theme.textMuted}>No substantial knowledge extracted</text>
-            </box>
-          </Show>
-          <Show
-            when={
-              compaction()?.extraction?.status === "completed" && (compaction()?.extraction?.files?.length ?? 0) > 0
-            }
-          >
-            <box paddingLeft={1} paddingTop={1}>
-              <text fg={theme.textMuted}>Extracted {compaction()!.extraction!.files!.length} knowledge file(s)</text>
-              <For each={compaction()!.extraction!.files!.filter((f) => f?.path)}>
-                {(file) => (
-                  <text fg={theme.textMuted}>
-                    ∟ {file.path.replace(/^\.opencode\/knowledge\//, "").replace(/\.md$/, "")}
-                    {file.summary ? `: ${file.summary}` : ""}
-                  </text>
-                )}
-              </For>
-            </box>
-          </Show>
-        </box>
+        ></box>
       </Show>
       <Show when={extraction()}>
         <box
@@ -1226,14 +1167,7 @@ function UserMessage(props: {
           titleAlignment="center"
           borderColor={theme.borderActive}
         >
-          <Show when={extraction()?.extraction?.status === "checking"}>
-            <box flexDirection="row" gap={1} paddingLeft={1} paddingTop={1}>
-              {/* @ts-ignore */}
-              <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
-              <text fg={theme.textMuted}>Checking for new knowledge...</text>
-            </box>
-          </Show>
-          <Show when={extraction()?.extraction?.status === "extracting"}>
+          <Show when={!extraction()?.extraction?.childSessionID}>
             <box paddingLeft={1} paddingTop={1}>
               <box flexDirection="row" gap={1}>
                 {/* @ts-ignore */}
@@ -1243,44 +1177,39 @@ function UserMessage(props: {
               <Show when={extraction()?.extraction?.summary?.length}>
                 <box>
                   <For each={extraction()!.extraction!.summary!}>
-                    {(item) => (
-                      <text fg={theme.textMuted}>
-                        ∟ {Locale.titlecase(item.tool)} {item.title ?? ""}
-                      </text>
-                    )}
+                    {(item, index) => {
+                      const summary = extraction()!.extraction!.summary!
+                      return (
+                        <text fg={theme.textMuted}>
+                          {index() === summary.length - 1 ? "└─" : "├─"} {Locale.titlecase(item.tool)}{" "}
+                          {item.title ?? ""}
+                        </text>
+                      )
+                    }}
                   </For>
                 </box>
               </Show>
             </box>
           </Show>
-          <Show when={extraction()?.extraction?.status === "skipped"}>
+          <Show when={extraction()?.extraction?.childSessionID && (extraction()?.extraction?.files?.length ?? 0) === 0}>
             <box paddingLeft={1} paddingTop={1}>
-              <text fg={theme.textMuted}>No new knowledge found</text>
+              <text fg={theme.textMuted}>No knowledge extracted</text>
             </box>
           </Show>
-          <Show
-            when={
-              extraction()?.extraction?.status === "completed" && (extraction()?.extraction?.files?.length ?? 0) === 0
-            }
-          >
-            <box paddingLeft={1} paddingTop={1}>
-              <text fg={theme.textMuted}>No substantial knowledge extracted</text>
-            </box>
-          </Show>
-          <Show
-            when={
-              extraction()?.extraction?.status === "completed" && (extraction()?.extraction?.files?.length ?? 0) > 0
-            }
-          >
+          <Show when={extraction()?.extraction?.childSessionID && (extraction()?.extraction?.files?.length ?? 0) > 0}>
             <box paddingLeft={1} paddingTop={1}>
               <text fg={theme.textMuted}>Extracted {extraction()!.extraction!.files!.length} knowledge file(s)</text>
               <For each={extraction()!.extraction!.files!.filter((f) => f?.path)}>
-                {(file) => (
-                  <text fg={theme.textMuted}>
-                    ∟ {file.path.replace(/^\.opencode\/knowledge\//, "").replace(/\.md$/, "")}
-                    {file.summary ? `: ${file.summary}` : ""}
-                  </text>
-                )}
+                {(file, index) => {
+                  const files = extraction()!.extraction!.files!.filter((f) => f?.path)
+                  return (
+                    <text fg={theme.textMuted}>
+                      {index() === files.length - 1 ? "└─" : "├─"}{" "}
+                      {file.path.replace(/^\.opencode\/knowledge\//, "").replace(/\.md$/, "")}
+                      {file.summary ? `: ${file.summary}` : ""}
+                    </text>
+                  )
+                }}
               </For>
             </box>
           </Show>
@@ -1716,11 +1645,15 @@ ToolRegistry.register<typeof TaskTool>({
         <Show when={props.metadata.summary?.length}>
           <box>
             <For each={props.metadata.summary ?? []}>
-              {(task) => (
-                <text style={{ fg: theme.textMuted }}>
-                  ∟ {Locale.titlecase(task.tool)} {task.state.status === "completed" ? task.state.title : ""}
-                </text>
-              )}
+              {(task, index) => {
+                const summary = props.metadata.summary ?? []
+                return (
+                  <text style={{ fg: theme.textMuted }}>
+                    {index() === summary.length - 1 ? "└─" : "├─"} {Locale.titlecase(task.tool)}{" "}
+                    {task.state.status === "completed" ? task.state.title : ""}
+                  </text>
+                )
+              }}
             </For>
           </box>
         </Show>

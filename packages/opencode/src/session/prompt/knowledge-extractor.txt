@@ -67,6 +67,8 @@ Knowledge files persist across session compactions. When context is compacted, t
 
 Ask yourself: "If the session history disappeared and only this knowledge file remained, what insights would still be valuable?"
 
+**Default to NOT extracting**: Most sessions are routine implementation work without lasting insights. Only extract when you find genuinely valuable patterns or decisions that would help in future sessions.
+
 Good knowledge entry:
 > "The `message-v2.ts` Part union uses discriminated unions with a `type` field. When adding new part types, add to both the individual schema AND the Part union. SDK regeneration is required after schema changes."
 
@@ -80,12 +82,17 @@ Bad knowledge entry (too session-specific):
    - After reading the transcript: `describe("Analyzing transcript for reusable insights")`
    - While checking existing knowledge: `describe("Checking existing knowledge files")`
    - While extracting specific patterns: `describe("Extracting design patterns from session")`
-3. Identify **reusable insights** worth preserving (not a changelog)
-4. Check `.opencode/knowledge/` for existing files that might be merge targets
-5. Either:
-   a) Create new file with descriptive name (e.g., `schema-patterns.md`, `testing-gotchas.md`)
-   b) Merge into existing relevant file, updating the knowledge (not appending logs)
-   c) If no substantial reusable knowledge, indicate clearly - many sessions won't have extractable knowledge
+3. **Critically evaluate** if there are **reusable insights** worth preserving (not a changelog)
+   - Be conservative: Most sessions won't have extractable knowledge
+   - Only proceed if you find **truly valuable, long-term insights**
+   - Session-specific implementation details are NOT worth extracting
+4. If no substantial reusable knowledge exists:
+   - Return empty result immediately (files: [], substantial: false)
+   - Do NOT create files just to fill space
+5. If substantial knowledge exists:
+   - Check `.opencode/knowledge/` for existing files that might be merge targets
+   - Either create new file with descriptive name (e.g., `schema-patterns.md`, `testing-gotchas.md`)
+   - Or merge into existing relevant file, updating the knowledge (not appending logs)
 
 ## Writing Knowledge Files
 
@@ -123,9 +130,11 @@ When merging into existing files, update `source_sessions` array and `last_updat
 ## Final Response
 
 Return a structured summary with:
-- `knowledge_files`: Array of paths to created/modified knowledge files (relative to project root)
-- `has_substantial_knowledge`: Boolean indicating if meaningful knowledge was extracted
+- `files`: Array of paths to created/modified knowledge files (relative to project root)
+- `substantial`: Boolean indicating if meaningful knowledge was extracted
 - `file_summaries`: One-line summary for each file describing what was captured/changed
+
+**IMPORTANT**: Be honest about whether substantial knowledge exists. It is BETTER to return `substantial: false` than to extract trivial session details.
 
 Format your final response as:
 
@@ -137,7 +146,7 @@ file_summaries:
 - .opencode/knowledge/example.md: Captured authentication flow design decisions and API patterns
 ```
 
-If no substantial knowledge was found:
+If no substantial knowledge was found (this is the COMMON case):
 
 ```
 KNOWLEDGE_RESULT:

@@ -266,13 +266,10 @@ export namespace SessionPrompt {
         const task = msg.parts.filter(
           (part): part is MessageV2.CompactionPart | MessageV2.SubtaskPart | MessageV2.ExtractionPart => {
             if (part.type === "subtask") return true
-            if (part.type === "compaction") {
-              return (
-                !part.extraction || (part.extraction.status !== "completed" && part.extraction.status !== "skipped")
-              )
-            }
+            if (part.type === "compaction") return true
             if (part.type === "extraction") {
-              return part.extraction.status !== "completed" && part.extraction.status !== "skipped"
+              // Stateless pattern: extraction is complete if childSessionID exists
+              return !part.extraction.childSessionID
             }
             return false
           },

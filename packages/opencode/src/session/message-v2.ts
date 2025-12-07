@@ -148,7 +148,6 @@ export namespace MessageV2 {
 
   export const ExtractionStatus = z
     .object({
-      status: z.enum(["checking", "extracting", "skipped", "completed"]),
       childSessionID: z.string().optional(),
       files: z
         .array(
