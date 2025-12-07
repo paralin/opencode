@@ -410,7 +410,7 @@ export namespace SessionPrompt {
                 start: part.state.status === "running" ? part.state.time.start : Date.now(),
                 end: Date.now(),
               },
-              metadata: part.metadata,
+              metadata: part.state.status === "running" ? part.state.metadata : undefined,
               input: part.state.input,
             },
           } satisfies MessageV2.ToolPart)
