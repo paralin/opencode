@@ -765,6 +765,10 @@ export const RunCommand = effectCmd({
 
         await share(client, sessionID)
 
+        if (args.format === "default") {
+          process.stderr.write(`[session:${sessionID}]` + EOL)
+        }
+
         if (!args.interactive) {
           const events = await client.event.subscribe()
           loop(client, events).catch((e) => {
