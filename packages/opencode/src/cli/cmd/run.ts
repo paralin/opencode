@@ -313,6 +313,10 @@ export const RunCommand = cmd({
         }
       }
 
+      if (args.format === "default") {
+        process.stderr.write(`[session:${sessionID}]` + EOL)
+      }
+
       return await execute(sdk, sessionID)
     }
 
@@ -364,6 +368,10 @@ export const RunCommand = cmd({
         if (!shareResult.error && "data" in shareResult && shareResult.data?.share?.url) {
           UI.println(UI.Style.TEXT_INFO_BOLD + "~  " + shareResult.data.share.url)
         }
+      }
+
+      if (args.format === "default") {
+        process.stderr.write(`[session:${sessionID}]` + EOL)
       }
 
       await execute(sdk, sessionID)
