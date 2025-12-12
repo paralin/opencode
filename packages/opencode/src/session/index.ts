@@ -275,6 +275,39 @@ export namespace Session {
     },
   )
 
+  export const exportMarkdown = fn(
+    z.object({
+      sessionID: Identifier.schema("session"),
+    }),
+    async (input) => {
+      const sessionInfo = await get(input.sessionID)
+      const sessionMessages = await messages({ sessionID: input.sessionID })
+
+      let transcript = `# ${sessionInfo.title}\n\n`
+      transcript += `**Session ID:** ${sessionInfo.id}\n`
+      transcript += `**Created:** ${new Date(sessionInfo.time.created).toLocaleString()}\n`
+      transcript += `**Updated:** ${new Date(sessionInfo.time.updated).toLocaleString()}\n\n`
+      transcript += `---\n\n`
+
+      for (const msg of sessionMessages) {
+        const role = msg.info.role === "user" ? "User" : "Assistant"
+        transcript += `## ${role}\n\n`
+
+        for (const part of msg.parts) {
+          if (part.type === "text" && !part.synthetic) {
+            transcript += `${part.text}\n\n`
+          } else if (part.type === "tool") {
+            transcript += `\`\`\`\nTool: ${part.tool}\n\`\`\`\n\n`
+          }
+        }
+
+        transcript += `---\n\n`
+      }
+
+      return transcript
+    },
+  )
+
   export async function* list() {
     const project = Instance.project
     for (const item of await Storage.list(["session", project.id])) {

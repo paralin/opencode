@@ -6,11 +6,12 @@ import { bootstrap } from "../bootstrap"
 import { UI } from "../ui"
 import { Locale } from "../../util/locale"
 import { EOL } from "os"
+import * as prompts from "@clack/prompts"
 
 export const SessionCommand = cmd({
   command: "session",
   describe: "manage sessions",
-  builder: (yargs: Argv) => yargs.command(SessionListCommand).demandCommand(),
+  builder: (yargs: Argv) => yargs.command(SessionListCommand).command(SessionExportCommand).demandCommand(),
   async handler() {},
 })
 
@@ -107,3 +108,115 @@ function formatSessionJSON(sessions: Session.Info[]): string {
   }))
   return JSON.stringify(jsonData, null, 2)
 }
+
+export const SessionExportCommand = cmd({
+  command: "export [sessionID]",
+  describe: "export session transcript to file",
+  builder: (yargs: Argv) => {
+    return yargs
+      .positional("sessionID", {
+        describe: "session id to export",
+        type: "string",
+      })
+      .option("output", {
+        alias: "o",
+        describe: "output file path",
+        type: "string",
+      })
+      .option("format", {
+        alias: "f",
+        describe: "output format",
+        type: "string",
+        choices: ["markdown", "json"],
+        default: "markdown",
+      })
+  },
+  handler: async (args) => {
+    await bootstrap(process.cwd(), async () => {
+      let sessionID = args.sessionID
+
+      if (!sessionID) {
+        prompts.intro("Export session", {
+          output: process.stderr,
+        })
+
+        const sessions = []
+        for await (const session of Session.list()) {
+          sessions.push(session)
+        }
+
+        if (sessions.length === 0) {
+          prompts.log.error("No sessions found", {
+            output: process.stderr,
+          })
+          prompts.outro("Done", {
+            output: process.stderr,
+          })
+          return
+        }
+
+        sessions.sort((a, b) => b.time.updated - a.time.updated)
+
+        const selectedSession = await prompts.autocomplete({
+          message: "Select session to export",
+          maxItems: 10,
+          options: sessions.map((session) => ({
+            label: session.title,
+            value: session.id,
+            hint: `${new Date(session.time.updated).toLocaleString()} • ${session.id.slice(-8)}`,
+          })),
+          output: process.stderr,
+        })
+
+        if (prompts.isCancel(selectedSession)) {
+          throw new UI.CancelledError()
+        }
+
+        sessionID = selectedSession as string
+      }
+
+      const sessionInfo = await Session.get(sessionID!)
+
+      let content: string
+      let defaultExtension: string
+
+      if (args.format === "json") {
+        const sessionMessages = await Session.messages({ sessionID: sessionID! })
+        const exportData = {
+          info: sessionInfo,
+          messages: sessionMessages.map((msg) => ({
+            info: msg.info,
+            parts: msg.parts,
+          })),
+        }
+        content = JSON.stringify(exportData, null, 2)
+        defaultExtension = "json"
+      } else {
+        content = await Session.exportMarkdown({ sessionID: sessionID! })
+        defaultExtension = "md"
+      }
+
+      const outputPath = await (async () => {
+        if (args.output) return args.output
+        const defaultFilename = `session-${sessionInfo.id.slice(0, 8)}.${defaultExtension}`
+        const filenameInput = await prompts.text({
+          message: "Export filename",
+          defaultValue: defaultFilename,
+          output: process.stderr,
+        })
+
+        if (prompts.isCancel(filenameInput)) {
+          throw new UI.CancelledError()
+        }
+
+        return filenameInput.trim()
+      })()
+
+      await Bun.write(outputPath, content)
+
+      prompts.outro(`Session exported to ${outputPath}`, {
+        output: process.stderr,
+      })
+    })
+  },
+})
