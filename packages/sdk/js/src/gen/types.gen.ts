@@ -1566,7 +1566,8 @@ export type Agent = {
   name: string
   description?: string
   mode: "subagent" | "primary" | "all"
-  builtIn: boolean
+  native?: boolean
+  hidden?: boolean
   topP?: number
   temperature?: number
   color?: string

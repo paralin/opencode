@@ -279,6 +279,7 @@ export namespace Agent {
           external_directory: "ask",
         },
         mode: "subagent",
+        native: true,
       },
     }
     for (const [key, value] of Object.entries(cfg.agent ?? {})) {
