@@ -1156,37 +1156,76 @@ export namespace Server {
           }
 
           const session = await Session.get(id)
-          const sessDir = path.join(Instance.directory, ".opencode", "sess")
-          await fs.mkdir(sessDir, { recursive: true })
-          const transcriptPath = path.join(sessDir, `${id}.md`)
 
-          let transcript = `# ${session.title}\n\n`
-          transcript += `**Session ID:** ${session.id}\n`
-          transcript += `**Created:** ${new Date(session.time.created).toLocaleString()}\n\n---\n\n`
-
-          for (const msg of msgs) {
-            const role = msg.info.role === "user" ? "User" : "Assistant"
-            transcript += `## ${role}\n\n`
-            for (const part of msg.parts) {
-              if (part.type === "text" && !part.synthetic) {
-                transcript += `${part.text}\n\n`
-              } else if (part.type === "tool" && part.state.status === "completed") {
-                transcript += `\`\`\`\nTool: ${part.tool}\n\`\`\`\n\n`
+          const compactionSummaries: string[] = []
+          let lastCompactionIndex = -1
+          for (let i = 0; i < msgs.length; i++) {
+            const msg = msgs[i]
+            if (msg.info.role === "assistant" && msg.info.summary) {
+              lastCompactionIndex = i
+              const textPart = msg.parts.find((p) => p.type === "text")
+              if (textPart && textPart.type === "text") {
+                compactionSummaries.push(textPart.text)
               }
             }
-            transcript += `---\n\n`
           }
 
-          await Bun.write(transcriptPath, transcript)
+          let totalChars = 0
+          for (const msg of msgs) {
+            for (const part of msg.parts) {
+              if (part.type === "text" && !part.synthetic) totalChars += part.text.length
+            }
+          }
+
+          const CHAR_THRESHOLD = 150_000
+          const shouldTruncate = totalChars > CHAR_THRESHOLD && lastCompactionIndex > 0
+
+          const formatMessages = (messages: typeof msgs) => {
+            let result = ""
+            for (const msg of messages) {
+              const role = msg.info.role === "user" ? "User" : "Assistant"
+              result += `## ${role}\n\n`
+              for (const part of msg.parts) {
+                if (part.type === "text" && !part.synthetic) {
+                  result += `${part.text}\n\n`
+                } else if (part.type === "tool" && part.state.status === "completed") {
+                  result += `\`\`\`\nTool: ${part.tool}\n\`\`\`\n\n`
+                }
+              }
+              result += `---\n\n`
+            }
+            return result
+          }
+
+          let transcript = ""
+          if (shouldTruncate) {
+            if (compactionSummaries.length > 0) {
+              transcript += `## Historical Context (Compaction Summaries)\n\n`
+              for (let i = 0; i < compactionSummaries.length; i++) {
+                transcript += `### Summary ${i + 1}\n\n${compactionSummaries[i]}\n\n---\n\n`
+              }
+            }
+            transcript += `## Recent Conversation\n\n`
+            transcript += formatMessages(msgs.slice(lastCompactionIndex + 1))
+          } else {
+            transcript += formatMessages(msgs)
+          }
 
           const knowledgeDir = path.join(Instance.directory, ".opencode", "knowledge")
           await fs.mkdir(knowledgeDir, { recursive: true })
 
           const prompt = [
-            `Session transcript: ${transcriptPath}`,
-            `Knowledge directory: ${knowledgeDir}`,
+            `Extract knowledge from this session and save to: ${knowledgeDir}`,
             `Session ID: ${id}`,
-          ].join("\n")
+            `Session Title: ${session.title}`,
+            shouldTruncate ? `(This is a truncated transcript - focus on the Recent Conversation section)` : "",
+            ``,
+            `<transcript>`,
+            transcript,
+            `</transcript>`,
+          ]
+            .filter(Boolean)
+            .join("\n")
 
           const msg = await Session.updateMessage({
             id: Identifier.ascending("message"),
