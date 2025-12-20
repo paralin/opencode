@@ -11,6 +11,7 @@ import { Agent } from "../agent/agent"
 import { Provider } from "../provider/provider"
 import { type Tool as AITool, tool, jsonSchema } from "ai"
 import { SessionCompaction } from "./compaction"
+import { SessionKnowledge } from "./knowledge"
 import { Instance } from "../project/instance"
 import { Bus } from "../bus"
 import { ProviderTransform } from "../provider/transform"
@@ -248,7 +249,7 @@ export namespace SessionPrompt {
       let lastUser: MessageV2.User | undefined
       let lastAssistant: MessageV2.Assistant | undefined
       let lastFinished: MessageV2.Assistant | undefined
-      let tasks: (MessageV2.CompactionPart | MessageV2.SubtaskPart)[] = []
+      let tasks: (MessageV2.CompactionPart | MessageV2.SubtaskPart | MessageV2.ExtractionPart)[] = []
       for (let i = msgs.length - 1; i >= 0; i--) {
         const msg = msgs[i]
         if (!lastUser && msg.info.role === "user") lastUser = msg.info as MessageV2.User
@@ -256,7 +257,9 @@ export namespace SessionPrompt {
         if (!lastFinished && msg.info.role === "assistant" && msg.info.finish)
           lastFinished = msg.info as MessageV2.Assistant
         if (lastUser && lastFinished) break
-        const task = msg.parts.filter((part) => part.type === "compaction" || part.type === "subtask")
+        const task = msg.parts.filter(
+          (part) => part.type === "compaction" || part.type === "subtask" || part.type === "extraction",
+        )
         if (task && !lastFinished) {
           tasks.push(...task)
         }
@@ -450,6 +453,18 @@ export namespace SessionPrompt {
           abort,
           sessionID,
           auto: task.auto,
+        })
+        if (result === "stop") break
+        continue
+      }
+
+      // pending extraction
+      if (task?.type === "extraction") {
+        const result = await SessionKnowledge.process({
+          messages: msgs,
+          parentID: lastUser.id,
+          abort,
+          sessionID,
         })
         if (result === "stop") break
         continue

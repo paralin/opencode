@@ -191,6 +191,7 @@ export type TextPart = {
   text: string
   synthetic?: boolean
   ignored?: boolean
+  collapsed?: string
   time?: {
     start: number
     end?: number
@@ -407,6 +408,13 @@ export type CompactionPart = {
   auto: boolean
 }
 
+export type ExtractionPart = {
+  id: string
+  sessionID: string
+  messageID: string
+  type: "extraction"
+}
+
 export type Part =
   | TextPart
   | {
@@ -429,6 +437,7 @@ export type Part =
   | AgentPart
   | RetryPart
   | CompactionPart
+  | ExtractionPart
 
 export type EventMessagePartUpdated = {
   type: "message.part.updated"
@@ -544,6 +553,14 @@ export type EventSessionCompacted = {
   type: "session.compacted"
   properties: {
     sessionID: string
+  }
+}
+
+export type EventSessionKnowledgeExtracted = {
+  type: "session.knowledge.extracted"
+  properties: {
+    sessionID: string
+    files: Array<string>
   }
 }
 
@@ -752,6 +769,7 @@ export type Event =
   | EventSessionStatus
   | EventSessionIdle
   | EventSessionCompacted
+  | EventSessionKnowledgeExtracted
   | EventCommandExecuted
   | EventSessionCreated
   | EventSessionUpdated
@@ -1582,6 +1600,7 @@ export type TextPartInput = {
   text: string
   synthetic?: boolean
   ignored?: boolean
+  collapsed?: string
   time?: {
     start: number
     end?: number

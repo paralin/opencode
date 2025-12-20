@@ -46,6 +46,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status"
 import { TuiEvent } from "@/cli/cmd/tui/event"
 import { Snapshot } from "@/snapshot"
 import { SessionSummary } from "@/session/summary"
+import { SessionKnowledge } from "@/session/knowledge"
 import { SessionStatus } from "@/session/status"
 import { upgradeWebSocket, websocket } from "hono/bun"
 import { errors } from "./error"
@@ -1145,6 +1146,7 @@ export namespace Server {
         async (c) => {
           const id = c.req.valid("param").id
           const body = c.req.valid("json")
+
           const msgs = await Session.messages({ sessionID: id })
           let currentAgent = "build"
           for (let i = msgs.length - 1; i >= 0; i--) {
@@ -1155,95 +1157,13 @@ export namespace Server {
             }
           }
 
-          const session = await Session.get(id)
-
-          const compactionSummaries: string[] = []
-          let lastCompactionIndex = -1
-          for (let i = 0; i < msgs.length; i++) {
-            const msg = msgs[i]
-            if (msg.info.role === "assistant" && msg.info.summary) {
-              lastCompactionIndex = i
-              const textPart = msg.parts.find((p) => p.type === "text")
-              if (textPart && textPart.type === "text") {
-                compactionSummaries.push(textPart.text)
-              }
-            }
-          }
-
-          let totalChars = 0
-          for (const msg of msgs) {
-            for (const part of msg.parts) {
-              if (part.type === "text" && !part.synthetic) totalChars += part.text.length
-            }
-          }
-
-          const CHAR_THRESHOLD = 150_000
-          const shouldTruncate = totalChars > CHAR_THRESHOLD && lastCompactionIndex > 0
-
-          const formatMessages = (messages: typeof msgs) => {
-            let result = ""
-            for (const msg of messages) {
-              const role = msg.info.role === "user" ? "User" : "Assistant"
-              result += `## ${role}\n\n`
-              for (const part of msg.parts) {
-                if (part.type === "text" && !part.synthetic) {
-                  result += `${part.text}\n\n`
-                } else if (part.type === "tool" && part.state.status === "completed") {
-                  result += `\`\`\`\nTool: ${part.tool}\n\`\`\`\n\n`
-                }
-              }
-              result += `---\n\n`
-            }
-            return result
-          }
-
-          let transcript = ""
-          if (shouldTruncate) {
-            if (compactionSummaries.length > 0) {
-              transcript += `## Historical Context (Compaction Summaries)\n\n`
-              for (let i = 0; i < compactionSummaries.length; i++) {
-                transcript += `### Summary ${i + 1}\n\n${compactionSummaries[i]}\n\n---\n\n`
-              }
-            }
-            transcript += `## Recent Conversation\n\n`
-            transcript += formatMessages(msgs.slice(lastCompactionIndex + 1))
-          } else {
-            transcript += formatMessages(msgs)
-          }
-
-          const knowledgeDir = path.join(Instance.directory, ".opencode", "knowledge")
-          await fs.mkdir(knowledgeDir, { recursive: true })
-
-          const prompt = [
-            `Extract knowledge from this session and save to: ${knowledgeDir}`,
-            `Session ID: ${id}`,
-            `Session Title: ${session.title}`,
-            shouldTruncate ? `(This is a truncated transcript - focus on the Recent Conversation section)` : "",
-            ``,
-            `<transcript>`,
-            transcript,
-            `</transcript>`,
-          ]
-            .filter(Boolean)
-            .join("\n")
-
-          const msg = await Session.updateMessage({
-            id: Identifier.ascending("message"),
-            role: "user",
-            model: { providerID: body.providerID, modelID: body.modelID },
+          await SessionKnowledge.create({
             sessionID: id,
             agent: currentAgent,
-            time: { created: Date.now() },
-          })
-
-          await Session.updatePart({
-            id: Identifier.ascending("part"),
-            messageID: msg.id,
-            sessionID: msg.sessionID,
-            type: "subtask",
-            prompt,
-            description: "Extract knowledge",
-            agent: "knowledge-extractor",
+            model: {
+              providerID: body.providerID,
+              modelID: body.modelID,
+            },
           })
 
           await SessionPrompt.loop(id)

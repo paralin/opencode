@@ -21,3 +21,4 @@ a.out
 target
 .scripts
 *.bun-build
+/.opencode/sess

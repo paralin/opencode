@@ -1050,6 +1050,7 @@ function UserMessage(props: {
   const color = createMemo(() => (queued() ? theme.accent : local.agent.color(props.message.agent)))
 
   const compaction = createMemo(() => props.parts.find((x) => x.type === "compaction"))
+  const extraction = createMemo(() => props.parts.find((x) => (x.type as string) === "extraction"))
 
   return (
     <>
@@ -1135,6 +1136,15 @@ function UserMessage(props: {
           marginTop={1}
           border={["top"]}
           title=" Compaction "
+          titleAlignment="center"
+          borderColor={theme.borderActive}
+        />
+      </Show>
+      <Show when={extraction()}>
+        <box
+          marginTop={1}
+          border={["top"]}
+          title=" Knowledge Extract "
           titleAlignment="center"
           borderColor={theme.borderActive}
         />
@@ -1252,17 +1262,22 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
 function TextPart(props: { last: boolean; part: TextPart; message: AssistantMessage }) {
   const ctx = use()
   const { theme, syntax } = useTheme()
+
+  // Use collapsed text if available, otherwise use full text
+  const displayText = createMemo(() => (props.part as any).collapsed ?? props.part.text)
+  const isCollapsed = createMemo(() => !!(props.part as any).collapsed)
+
   return (
-    <Show when={props.part.text.trim()}>
+    <Show when={displayText().trim()}>
       <box id={"text-" + props.part.id} paddingLeft={3} marginTop={1} flexShrink={0}>
         <code
           filetype="markdown"
           drawUnstyledText={false}
           streaming={true}
           syntaxStyle={syntax()}
-          content={props.part.text.trim()}
+          content={displayText().trim()}
           conceal={ctx.conceal()}
-          fg={theme.text}
+          fg={isCollapsed() ? theme.textMuted : theme.text}
         />
       </box>
     </Show>

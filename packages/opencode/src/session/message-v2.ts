@@ -63,6 +63,7 @@ export namespace MessageV2 {
     text: z.string(),
     synthetic: z.boolean().optional(),
     ignored: z.boolean().optional(),
+    collapsed: z.string().optional(),
     time: z
       .object({
         start: z.number(),
@@ -154,6 +155,13 @@ export namespace MessageV2 {
     ref: "CompactionPart",
   })
   export type CompactionPart = z.infer<typeof CompactionPart>
+
+  export const ExtractionPart = PartBase.extend({
+    type: z.literal("extraction"),
+  }).meta({
+    ref: "ExtractionPart",
+  })
+  export type ExtractionPart = z.infer<typeof ExtractionPart>
 
   export const SubtaskPart = PartBase.extend({
     type: z.literal("subtask"),
@@ -325,6 +333,7 @@ export namespace MessageV2 {
       AgentPart,
       RetryPart,
       CompactionPart,
+      ExtractionPart,
     ])
     .meta({
       ref: "Part",
@@ -431,7 +440,7 @@ export namespace MessageV2 {
         }
         result.push(userMessage)
         for (const part of msg.parts) {
-          if (part.type === "text" && !part.ignored)
+          if (part.type === "text" && !part.ignored && !part.collapsed)
             userMessage.parts.push({
               type: "text",
               text: part.text,
@@ -457,6 +466,12 @@ export namespace MessageV2 {
               text: "The following tool was executed by the user",
             })
           }
+          if (part.type === "extraction") {
+            userMessage.parts.push({
+              type: "text",
+              text: "Extract knowledge from this session and update knowledge files.",
+            })
+          }
         }
       }
 
@@ -477,7 +492,7 @@ export namespace MessageV2 {
         }
         result.push(assistantMessage)
         for (const part of msg.parts) {
-          if (part.type === "text")
+          if (part.type === "text" && !part.collapsed)
             assistantMessage.parts.push({
               type: "text",
               text: part.text,
