@@ -491,6 +491,7 @@ export namespace MessageV2 {
           parts: [],
         }
         result.push(assistantMessage)
+        const attachments: UIMessage[] = []
         for (const part of msg.parts) {
           if (part.type === "text" && !part.collapsed)
             assistantMessage.parts.push({
@@ -505,7 +506,7 @@ export namespace MessageV2 {
           if (part.type === "tool") {
             if (part.state.status === "completed") {
               if (part.state.attachments?.length) {
-                result.push({
+                attachments.push({
                   id: Identifier.ascending("message"),
                   role: "user",
                   parts: [
@@ -549,6 +550,7 @@ export namespace MessageV2 {
             })
           }
         }
+        result.push(...attachments)
       }
     }
 

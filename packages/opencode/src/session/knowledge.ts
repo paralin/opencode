@@ -74,91 +74,134 @@ export namespace SessionKnowledge {
 
     const transcript = buildTranscript(input.messages)
     const knowledgeDir = path.join(Instance.directory, ".opencode", "knowledge")
-
-    const msg = (await Session.updateMessage({
-      id: Identifier.ascending("message"),
-      role: "assistant",
-      parentID: input.parentID,
-      sessionID: input.sessionID,
-      mode: "knowledge-extractor",
-      agent: "knowledge-extractor",
-      summary: true,
-      path: {
-        cwd: Instance.directory,
-        root: Instance.worktree,
-      },
-      cost: 0,
-      tokens: {
-        output: 0,
-        input: 0,
-        reasoning: 0,
-        cache: { read: 0, write: 0 },
-      },
-      modelID: model.id,
-      providerID: model.providerID,
-      time: {
-        created: Date.now(),
-      },
-    })) as MessageV2.Assistant
-
-    const processor = SessionProcessor.create({
-      assistantMessage: msg,
-      sessionID: input.sessionID,
-      model,
-      abort: input.abort,
-    })
-
-    const tools = await resolveTools({
-      agent,
-      sessionID: input.sessionID,
-      model,
-      processor,
-    })
-
     const session = await Session.get(input.sessionID)
-    const result = await processor.process({
-      user: userMessage,
-      agent,
-      abort: input.abort,
-      sessionID: input.sessionID,
-      tools,
-      system: [],
-      messages: [
-        ...MessageV2.toModelMessage(input.messages),
+
+    const extractionPrompt = {
+      role: "user" as const,
+      content: [
         {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: [
-                `Extract knowledge from this session and save to: ${knowledgeDir}`,
-                `Session ID: ${input.sessionID}`,
-                `Session Title: ${session.title}`,
-                ``,
-                `<transcript>`,
-                transcript,
-                `</transcript>`,
-                ``,
-                `After extracting knowledge, stop. Do not continue with any previous task.`,
-              ].join("\n"),
-            },
-          ],
+          type: "text" as const,
+          text: [
+            `Extract knowledge from this session and save to: ${knowledgeDir}`,
+            `Session ID: ${input.sessionID}`,
+            `Session Title: ${session.title}`,
+            ``,
+            `<transcript>`,
+            transcript,
+            `</transcript>`,
+            ``,
+            `After extracting knowledge, stop. Do not continue with any previous task.`,
+          ].join("\n"),
         },
       ],
-      model,
-    })
+    }
 
-    // After completion, collapse the assistant message
-    await collapse({
-      sessionID: input.sessionID,
-      messageID: msg.id,
-    })
+    let lastAssistantID: string | undefined
+    let hasError = false
 
-    if (processor.message.error) return "stop"
+    // Loop until agent finishes (not just tool-calls)
+    while (true) {
+      if (input.abort.aborted) break
 
-    // Publish extraction event with file paths
-    const files = await getExtractedFiles(msg.id)
-    Bus.publish(Event.Extracted, { sessionID: input.sessionID, files })
+      // Re-read messages to get fresh state including tool results
+      const msgs = await Session.messages({ sessionID: input.sessionID })
+
+      // Check if last assistant message finished (not with tool-calls)
+      const lastAssistant = msgs.findLast((m) => m.info.role === "assistant")?.info as MessageV2.Assistant | undefined
+      if (
+        lastAssistant &&
+        lastAssistant.finish &&
+        !["tool-calls", "unknown"].includes(lastAssistant.finish) &&
+        lastAssistant.id === lastAssistantID
+      ) {
+        break
+      }
+
+      // Create new assistant message for this iteration
+      const msg = (await Session.updateMessage({
+        id: Identifier.ascending("message"),
+        role: "assistant",
+        parentID: input.parentID,
+        sessionID: input.sessionID,
+        mode: "knowledge-extractor",
+        agent: "knowledge-extractor",
+        summary: true,
+        path: {
+          cwd: Instance.directory,
+          root: Instance.worktree,
+        },
+        cost: 0,
+        tokens: {
+          output: 0,
+          input: 0,
+          reasoning: 0,
+          cache: { read: 0, write: 0 },
+        },
+        modelID: model.id,
+        providerID: model.providerID,
+        time: {
+          created: Date.now(),
+        },
+      })) as MessageV2.Assistant
+
+      lastAssistantID = msg.id
+
+      const processor = SessionProcessor.create({
+        assistantMessage: msg,
+        sessionID: input.sessionID,
+        model,
+        abort: input.abort,
+      })
+
+      const tools = await resolveTools({
+        agent,
+        sessionID: input.sessionID,
+        model,
+        processor,
+      })
+
+      const result = await processor.process({
+        user: userMessage,
+        agent,
+        abort: input.abort,
+        sessionID: input.sessionID,
+        tools,
+        system: [],
+        messages: [...MessageV2.toModelMessage(msgs), extractionPrompt],
+        model,
+      })
+
+      // After each iteration, collapse the assistant message
+      await collapse({
+        sessionID: input.sessionID,
+        messageID: msg.id,
+      })
+
+      if (result === "stop" || processor.message.error) {
+        hasError = !!processor.message.error
+        break
+      }
+
+      // Check if finished (not with tool-calls)
+      if (processor.message.finish && !["tool-calls", "unknown"].includes(processor.message.finish)) {
+        break
+      }
+    }
+
+    if (hasError) return "stop"
+
+    // Collect all extracted files from all assistant messages in this extraction
+    const allMsgs = await Session.messages({ sessionID: input.sessionID })
+    const extractionMsgs = allMsgs.filter(
+      (m) => m.info.role === "assistant" && m.info.agent === "knowledge-extractor" && m.info.summary,
+    )
+    const allFiles: string[] = []
+    for (const m of extractionMsgs) {
+      const files = await getExtractedFiles(m.info.id)
+      allFiles.push(...files)
+    }
+
+    Bus.publish(Event.Extracted, { sessionID: input.sessionID, files: [...new Set(allFiles)] })
 
     return "stop"
   }
