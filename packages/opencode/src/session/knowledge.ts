@@ -17,6 +17,7 @@ import { Wildcard } from "@/util/wildcard"
 import { Plugin } from "@/plugin"
 import { type Tool as AITool, tool, jsonSchema } from "ai"
 import { pipe, mergeDeep } from "remeda"
+import { Token } from "@/util/token"
 
 export namespace SessionKnowledge {
   const log = Log.create({ service: "session.knowledge" })
@@ -72,9 +73,15 @@ export namespace SessionKnowledge {
       ? await Provider.getModel(agent.model.providerID, agent.model.modelID)
       : await Provider.getModel(userMessage.model.providerID, userMessage.model.modelID)
 
-    const transcript = buildTranscript(input.messages)
     const knowledgeDir = path.join(Instance.directory, ".opencode", "knowledge")
     const session = await Session.get(input.sessionID)
+
+    // Calculate max tokens for transcript based on model context limit
+    // Reserve tokens for: system prompt (~2K), extraction prompt wrapper (~500), output (~8K), safety margin
+    const RESERVED_TOKENS = 15_000
+    const maxTranscriptTokens = Math.max(10_000, (model.limit.context || 200_000) - RESERVED_TOKENS)
+
+    const transcript = buildTranscript(input.messages, maxTranscriptTokens)
 
     const extractionPrompt = {
       role: "user" as const,
@@ -96,96 +103,72 @@ export namespace SessionKnowledge {
       ],
     }
 
-    let lastAssistantID: string | undefined
     let hasError = false
 
-    // Loop until agent finishes (not just tool-calls)
-    while (true) {
-      if (input.abort.aborted) break
+    // Create first assistant message for the extraction
+    const msg = (await Session.updateMessage({
+      id: Identifier.ascending("message"),
+      role: "assistant",
+      parentID: input.parentID,
+      sessionID: input.sessionID,
+      mode: "knowledge-extractor",
+      agent: "knowledge-extractor",
+      summary: true,
+      path: {
+        cwd: Instance.directory,
+        root: Instance.worktree,
+      },
+      cost: 0,
+      tokens: {
+        output: 0,
+        input: 0,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      },
+      modelID: model.id,
+      providerID: model.providerID,
+      time: {
+        created: Date.now(),
+      },
+    })) as MessageV2.Assistant
 
-      // Re-read messages to get fresh state including tool results
-      const msgs = await Session.messages({ sessionID: input.sessionID })
+    const processor = SessionProcessor.create({
+      assistantMessage: msg,
+      sessionID: input.sessionID,
+      model,
+      abort: input.abort,
+    })
 
-      // Check if last assistant message finished (not with tool-calls)
-      const lastAssistant = msgs.findLast((m) => m.info.role === "assistant")?.info as MessageV2.Assistant | undefined
-      if (
-        lastAssistant &&
-        lastAssistant.finish &&
-        !["tool-calls", "unknown"].includes(lastAssistant.finish) &&
-        lastAssistant.id === lastAssistantID
-      ) {
-        break
-      }
+    const tools = await resolveTools({
+      agent,
+      sessionID: input.sessionID,
+      model,
+      processor,
+    })
 
-      // Create new assistant message for this iteration
-      const msg = (await Session.updateMessage({
-        id: Identifier.ascending("message"),
-        role: "assistant",
-        parentID: input.parentID,
-        sessionID: input.sessionID,
-        mode: "knowledge-extractor",
-        agent: "knowledge-extractor",
-        summary: true,
-        path: {
-          cwd: Instance.directory,
-          root: Instance.worktree,
-        },
-        cost: 0,
-        tokens: {
-          output: 0,
-          input: 0,
-          reasoning: 0,
-          cache: { read: 0, write: 0 },
-        },
-        modelID: model.id,
-        providerID: model.providerID,
-        time: {
-          created: Date.now(),
-        },
-      })) as MessageV2.Assistant
+    // Single call to processor.process - it handles tool loops internally
+    const result = await processor.process({
+      user: userMessage,
+      agent,
+      abort: input.abort,
+      sessionID: input.sessionID,
+      tools,
+      system: [],
+      // Only send the extraction prompt with embedded transcript
+      // The transcript already contains the conversation content in a summarized format
+      // This avoids double-sending the conversation (once via toModelMessage, once in transcript)
+      messages: [extractionPrompt],
+      model,
+    })
 
-      lastAssistantID = msg.id
+    // Collapse the assistant message
+    await collapse({
+      sessionID: input.sessionID,
+      messageID: msg.id,
+    })
 
-      const processor = SessionProcessor.create({
-        assistantMessage: msg,
-        sessionID: input.sessionID,
-        model,
-        abort: input.abort,
-      })
-
-      const tools = await resolveTools({
-        agent,
-        sessionID: input.sessionID,
-        model,
-        processor,
-      })
-
-      const result = await processor.process({
-        user: userMessage,
-        agent,
-        abort: input.abort,
-        sessionID: input.sessionID,
-        tools,
-        system: [],
-        messages: [...MessageV2.toModelMessage(msgs), extractionPrompt],
-        model,
-      })
-
-      // After each iteration, collapse the assistant message
-      await collapse({
-        sessionID: input.sessionID,
-        messageID: msg.id,
-      })
-
-      if (result === "stop" || processor.message.error) {
-        hasError = !!processor.message.error
-        break
-      }
-
-      // Check if finished (not with tool-calls)
-      if (processor.message.finish && !["tool-calls", "unknown"].includes(processor.message.finish)) {
-        break
-      }
+    if (result === "stop" || processor.message.error) {
+      hasError = !!processor.message.error
     }
 
     if (hasError) return "stop"
@@ -206,10 +189,14 @@ export namespace SessionKnowledge {
     return "stop"
   }
 
-  function buildTranscript(messages: MessageV2.WithParts[]): string {
+  // Minimum number of recent message pairs to always keep in full
+  const MIN_RECENT_EXCHANGES = 10
+
+  function buildTranscript(messages: MessageV2.WithParts[], maxTokens: number): string {
     const compactionSummaries: string[] = []
     let lastCompactionIndex = -1
 
+    // Find all compaction summaries
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i]
       if (msg.info.role === "assistant" && msg.info.summary) {
@@ -221,6 +208,7 @@ export namespace SessionKnowledge {
       }
     }
 
+    // Calculate total characters
     let totalChars = 0
     for (const msg of messages) {
       for (const part of msg.parts) {
@@ -228,10 +216,12 @@ export namespace SessionKnowledge {
       }
     }
 
-    const CHAR_THRESHOLD = 150_000
-    const shouldTruncate = totalChars > CHAR_THRESHOLD && lastCompactionIndex > 0
+    const actualTokens = Math.round(totalChars / 4)
 
-    const formatMessages = (msgs: typeof messages) => {
+    // Determine if we need to truncate based on token limit
+    const shouldTruncate = actualTokens > maxTokens
+
+    const formatMessages = (msgs: typeof messages, brief = false) => {
       let result = ""
       for (const msg of msgs) {
         const role = msg.info.role === "user" ? "User" : "Assistant"
@@ -240,7 +230,12 @@ export namespace SessionKnowledge {
           if (part.type === "text" && !part.synthetic) {
             result += `${part.text}\n\n`
           } else if (part.type === "tool" && part.state.status === "completed") {
-            result += `\`\`\`\nTool: ${part.tool}\n\`\`\`\n\n`
+            if (brief) {
+              // In brief mode, just note the tool was used
+              result += `[Tool: ${part.tool}]\n\n`
+            } else {
+              result += `\`\`\`\nTool: ${part.tool}\n\`\`\`\n\n`
+            }
           }
         }
         result += `---\n\n`
@@ -248,21 +243,104 @@ export namespace SessionKnowledge {
       return result
     }
 
-    let transcript = ""
-    if (shouldTruncate) {
-      if (compactionSummaries.length > 0) {
-        transcript += `## Historical Context (Compaction Summaries)\n\n`
-        for (let i = 0; i < compactionSummaries.length; i++) {
-          transcript += `### Summary ${i + 1}\n\n${compactionSummaries[i]}\n\n---\n\n`
+    // Format older messages more briefly (user prompts only, no tool outputs)
+    const formatOlderMessages = (msgs: typeof messages) => {
+      let result = ""
+      for (const msg of msgs) {
+        if (msg.info.role === "user") {
+          result += `## User\n\n`
+          for (const part of msg.parts) {
+            if (part.type === "text" && !part.synthetic) {
+              result += `${part.text}\n\n`
+            }
+          }
+          result += `---\n\n`
+        } else if (msg.info.role === "assistant") {
+          // For assistant messages, just show a brief summary
+          const textParts = msg.parts.filter((p) => p.type === "text" && !p.synthetic) as MessageV2.TextPart[]
+          const toolParts = msg.parts.filter((p) => p.type === "tool") as MessageV2.ToolPart[]
+
+          result += `## Assistant\n\n`
+          if (textParts.length > 0) {
+            // Take first 500 chars of text content
+            const fullText = textParts.map((p) => p.text).join("\n")
+            const truncated = fullText.length > 500 ? fullText.slice(0, 500) + "..." : fullText
+            result += `${truncated}\n\n`
+          }
+          if (toolParts.length > 0) {
+            const toolNames = [...new Set(toolParts.map((p) => p.tool))]
+            result += `[Used tools: ${toolNames.join(", ")}]\n\n`
+          }
+          result += `---\n\n`
         }
+      }
+      return result
+    }
+
+    let transcript = ""
+
+    if (!shouldTruncate) {
+      // Small enough - include everything
+      transcript = formatMessages(messages)
+    } else if (lastCompactionIndex > 0 && compactionSummaries.length > 0) {
+      // Has compaction summaries - use them for history
+      transcript += `## Historical Context (Compaction Summaries)\n\n`
+      for (let i = 0; i < compactionSummaries.length; i++) {
+        transcript += `### Summary ${i + 1}\n\n${compactionSummaries[i]}\n\n---\n\n`
       }
       transcript += `## Recent Conversation\n\n`
       transcript += formatMessages(messages.slice(lastCompactionIndex + 1))
     } else {
-      transcript += formatMessages(messages)
+      // No compaction summaries - use smart truncation
+      // Keep last N exchanges in full, summarize older ones
+      const recentStartIndex = findRecentExchangeStart(messages, MIN_RECENT_EXCHANGES)
+
+      if (recentStartIndex > 0) {
+        transcript += `## Earlier Conversation (Summarized)\n\n`
+        transcript += formatOlderMessages(messages.slice(0, recentStartIndex))
+        transcript += `## Recent Conversation (Full)\n\n`
+        transcript += formatMessages(messages.slice(recentStartIndex))
+      } else {
+        // Not enough messages to split, just format all (should be rare if we're truncating)
+        transcript += formatMessages(messages, true)
+      }
+    }
+
+    // Final safety check - if still too long, hard truncate
+    const finalTokens = Token.estimate(transcript)
+    if (finalTokens > maxTokens) {
+      log.warn("transcript still exceeds limit after truncation", {
+        tokens: finalTokens,
+        maxTokens,
+      })
+      // Keep the end (most recent content) and truncate from start
+      const maxChars = maxTokens * 4
+      if (transcript.length > maxChars) {
+        transcript =
+          `[Earlier content truncated due to length]\n\n---\n\n` + transcript.slice(transcript.length - maxChars + 100)
+      }
     }
 
     return transcript
+  }
+
+  // Find the starting index to keep the last N user/assistant exchanges
+  function findRecentExchangeStart(messages: MessageV2.WithParts[], minExchanges: number): number {
+    let exchanges = 0
+    let lastRole: "user" | "assistant" | null = null
+
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const role = messages[i].info.role
+      // Count an exchange when we see a user message followed by assistant response
+      if (role === "user" && lastRole === "assistant") {
+        exchanges++
+        if (exchanges >= minExchanges) {
+          return i
+        }
+      }
+      lastRole = role
+    }
+    return 0
   }
 
   async function collapse(input: { sessionID: string; messageID: string }) {
