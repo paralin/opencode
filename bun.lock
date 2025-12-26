@@ -336,7 +336,14 @@
         "@types/node": "catalog:",
         "@typescript/native-preview": "catalog:",
         "typescript": "catalog:",
+        "zod": "catalog:",
       },
+      "peerDependencies": {
+        "zod": "^3.23.0",
+      },
+      "optionalPeers": [
+        "zod",
+      ],
     },
     "packages/slack": {
       "name": "@opencode-ai/slack",

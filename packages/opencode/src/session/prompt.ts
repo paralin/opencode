@@ -44,6 +44,7 @@ import { SessionStatus } from "./status"
 import { LLM } from "./llm"
 import { iife } from "@/util/iife"
 import { Shell } from "@/shell/shell"
+import { ClientTool } from "./client-tool"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -51,6 +52,19 @@ globalThis.AI_SDK_LOG_WARNINGS = false
 export namespace SessionPrompt {
   const log = Log.create({ service: "session.prompt" })
   export const OUTPUT_TOKEN_MAX = Flag.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX || 32_000
+
+  /**
+   * Schema for client-side tool definitions.
+   * These tools are defined by the SDK user and executed client-side.
+   */
+  export const ClientToolSchema = z
+    .object({
+      description: z.string().describe("Description of what the tool does"),
+      parameters: z.record(z.string(), z.any()).describe("JSON Schema for the tool parameters"),
+    })
+    .meta({
+      ref: "ClientTool",
+    })
 
   const state = Instance.state(
     () => {
@@ -89,7 +103,10 @@ export namespace SessionPrompt {
       .optional(),
     agent: z.string().optional(),
     noReply: z.boolean().optional(),
-    tools: z.record(z.string(), z.boolean()).optional(),
+    tools: z
+      .record(z.string(), z.union([z.boolean(), ClientToolSchema]))
+      .optional()
+      .describe("Enable/disable tools or define client-side tools"),
     system: z.string().optional(),
     parts: z.array(
       z.discriminatedUnion("type", [
@@ -592,15 +609,29 @@ export namespace SessionPrompt {
     agent: Agent.Info
     model: Provider.Model
     sessionID: string
-    tools?: Record<string, boolean>
+    tools?: Record<string, boolean | ClientTool.Definition>
     processor: SessionProcessor.Info
   }) {
     using _ = log.time("resolveTools")
     const tools: Record<string, AITool> = {}
+
+    // Separate client tools from enable/disable flags
+    const clientTools: Record<string, ClientTool.Definition> = {}
+    const toolFlags: Record<string, boolean> = {}
+
+    for (const [id, value] of Object.entries(input.tools ?? {})) {
+      if (ClientTool.isClientTool(value)) {
+        clientTools[id] = value
+        toolFlags[id] = true // Enable the client tool
+      } else {
+        toolFlags[id] = value
+      }
+    }
+
     const enabledTools = pipe(
       input.agent.tools,
       mergeDeep(await ToolRegistry.enabled(input.agent)),
-      mergeDeep(input.tools ?? {}),
+      mergeDeep(toolFlags),
     )
     for (const item of await ToolRegistry.tools(input.model.providerID)) {
       if (Wildcard.all(item.id, enabledTools) === false) continue
@@ -730,11 +761,71 @@ export namespace SessionPrompt {
       }
       tools[key] = item
     }
+
+    // Add client-side tools
+    for (const [id, def] of Object.entries(clientTools)) {
+      const schema = ProviderTransform.schema(input.model, def.parameters as Record<string, unknown>)
+      tools[id] = tool({
+        id: id as any,
+        description: def.description,
+        inputSchema: jsonSchema(schema as any),
+        async execute(args, options) {
+          await Plugin.trigger(
+            "tool.execute.before",
+            {
+              tool: id,
+              sessionID: input.sessionID,
+              callID: options.toolCallId,
+            },
+            {
+              args,
+            },
+          )
+          // Execute client tool - this will emit an event and wait for the client response
+          const output = await ClientTool.execute(
+            input.sessionID,
+            input.processor.message.id,
+            id,
+            args,
+            options.toolCallId,
+          )
+          const result = {
+            title: id,
+            metadata: {},
+            output,
+          }
+          await Plugin.trigger(
+            "tool.execute.after",
+            {
+              tool: id,
+              sessionID: input.sessionID,
+              callID: options.toolCallId,
+            },
+            result,
+          )
+          return result
+        },
+        toModelOutput(result) {
+          return {
+            type: "text",
+            value: result.output,
+          }
+        },
+      })
+    }
+
     return tools
   }
 
   async function createUserMessage(input: PromptInput) {
     const agent = await Agent.get(input.agent ?? (await Agent.defaultAgent()))
+    // Extract just the boolean enable/disable flags for storage
+    // Client tool definitions are not stored in the message
+    const toolFlags: Record<string, boolean> | undefined = input.tools
+      ? Object.fromEntries(
+          Object.entries(input.tools).map(([id, value]) => [id, typeof value === "boolean" ? value : true]),
+        )
+      : undefined
     const info: MessageV2.Info = {
       id: input.messageID ?? Identifier.ascending("message"),
       role: "user",
@@ -742,7 +833,7 @@ export namespace SessionPrompt {
       time: {
         created: Date.now(),
       },
-      tools: input.tools,
+      tools: toolFlags,
       agent: agent.name,
       model: input.model ?? agent.model ?? (await lastModel(input.sessionID)),
       system: input.system,

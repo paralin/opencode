@@ -574,6 +574,27 @@ export type EventCommandExecuted = {
   }
 }
 
+export type EventToolClientCall = {
+  type: "tool.client.call"
+  properties: {
+    sessionID: string
+    messageID: string
+    toolID: string
+    callID: string
+    args: unknown
+  }
+}
+
+export type EventToolClientResult = {
+  type: "tool.client.result"
+  properties: {
+    sessionID: string
+    callID: string
+    result?: string
+    error?: string
+  }
+}
+
 export type Session = {
   id: string
   projectID: string
@@ -771,6 +792,8 @@ export type Event =
   | EventSessionCompacted
   | EventSessionKnowledgeExtracted
   | EventCommandExecuted
+  | EventToolClientCall
+  | EventToolClientResult
   | EventSessionCreated
   | EventSessionUpdated
   | EventSessionDeleted
@@ -1592,6 +1615,19 @@ export type Path = {
 
 export type VcsInfo = {
   branch: string
+}
+
+export type ClientTool = {
+  /**
+   * Description of what the tool does
+   */
+  description: string
+  /**
+   * JSON Schema for the tool parameters
+   */
+  parameters: {
+    [key: string]: unknown
+  }
 }
 
 export type TextPartInput = {
@@ -2662,6 +2698,55 @@ export type SessionAbortResponses = {
 
 export type SessionAbortResponse = SessionAbortResponses[keyof SessionAbortResponses]
 
+export type SessionToolResultData = {
+  body?: {
+    /**
+     * The tool call ID
+     */
+    callID: string
+    /**
+     * The result of the tool execution
+     */
+    result?: string
+    /**
+     * Error message if the tool execution failed
+     */
+    error?: string
+  }
+  path: {
+    /**
+     * Session ID
+     */
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/session/{sessionID}/tool_result"
+}
+
+export type SessionToolResultErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type SessionToolResultError = SessionToolResultErrors[keyof SessionToolResultErrors]
+
+export type SessionToolResultResponses = {
+  /**
+   * Tool result accepted
+   */
+  200: boolean
+}
+
+export type SessionToolResultResponse = SessionToolResultResponses[keyof SessionToolResultResponses]
+
 export type SessionUnshareData = {
   body?: never
   path: {
@@ -2893,8 +2978,11 @@ export type SessionPromptData = {
     }
     agent?: string
     noReply?: boolean
+    /**
+     * Enable/disable tools or define client-side tools
+     */
     tools?: {
-      [key: string]: boolean
+      [key: string]: boolean | ClientTool
     }
     system?: string
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
@@ -3076,8 +3164,11 @@ export type SessionPromptAsyncData = {
     }
     agent?: string
     noReply?: boolean
+    /**
+     * Enable/disable tools or define client-side tools
+     */
     tools?: {
-      [key: string]: boolean
+      [key: string]: boolean | ClientTool
     }
     system?: string
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>

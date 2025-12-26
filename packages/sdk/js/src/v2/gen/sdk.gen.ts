@@ -10,6 +10,7 @@ import type {
   Auth as Auth2,
   AuthSetErrors,
   AuthSetResponses,
+  ClientTool,
   CommandListResponses,
   Config as Config2,
   ConfigGetResponses,
@@ -116,6 +117,8 @@ import type {
   SessionSummarizeResponses,
   SessionTodoErrors,
   SessionTodoResponses,
+  SessionToolResultErrors,
+  SessionToolResultResponses,
   SessionUnrevertErrors,
   SessionUnrevertResponses,
   SessionUnshareErrors,
@@ -1032,6 +1035,47 @@ export class Session extends HeyApiClient {
   }
 
   /**
+   * Submit tool result
+   *
+   * Submit the result of a client-side tool execution. This is used by SDK clients to return results from tools that execute client-side.
+   */
+  public toolResult<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      callID?: string
+      result?: string
+      error?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "body", key: "callID" },
+            { in: "body", key: "result" },
+            { in: "body", key: "error" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionToolResultResponses, SessionToolResultErrors, ThrowOnError>({
+      url: "/session/{sessionID}/tool_result",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
    * Unshare session
    *
    * Remove the shareable link for a session, making it private again.
@@ -1254,7 +1298,7 @@ export class Session extends HeyApiClient {
       agent?: string
       noReply?: boolean
       tools?: {
-        [key: string]: boolean
+        [key: string]: boolean | ClientTool
       }
       system?: string
       parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
@@ -1340,7 +1384,7 @@ export class Session extends HeyApiClient {
       agent?: string
       noReply?: boolean
       tools?: {
-        [key: string]: boolean
+        [key: string]: boolean | ClientTool
       }
       system?: string
       parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>

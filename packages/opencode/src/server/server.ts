@@ -35,6 +35,7 @@ import { ProjectRoute } from "./project"
 import { ToolRegistry } from "../tool/registry"
 import { zodToJsonSchema } from "zod-to-json-schema"
 import { SessionPrompt } from "../session/prompt"
+import { ClientTool } from "../session/client-tool"
 import { SessionCompaction } from "../session/compaction"
 import { SessionRevert } from "../session/revert"
 import { lazy } from "../util/lazy"
@@ -952,6 +953,42 @@ export namespace Server {
         ),
         async (c) => {
           SessionPrompt.cancel(c.req.valid("param").sessionID)
+          return c.json(true)
+        },
+      )
+      .post(
+        "/session/:sessionID/tool_result",
+        describeRoute({
+          summary: "Submit tool result",
+          description:
+            "Submit the result of a client-side tool execution. This is used by SDK clients to return results from tools that execute client-side.",
+          operationId: "session.toolResult",
+          responses: {
+            200: {
+              description: "Tool result accepted",
+              content: {
+                "application/json": {
+                  schema: resolver(z.boolean()),
+                },
+              },
+            },
+            ...errors(400, 404),
+          },
+        }),
+        validator(
+          "param",
+          z.object({
+            sessionID: z.string().meta({ description: "Session ID" }),
+          }),
+        ),
+        validator("json", ClientTool.ResultInput),
+        async (c) => {
+          const sessionID = c.req.valid("param").sessionID
+          const body = c.req.valid("json")
+          const handled = ClientTool.handleResult(sessionID, body)
+          if (!handled) {
+            return c.json(false)
+          }
           return c.json(true)
         },
       )
