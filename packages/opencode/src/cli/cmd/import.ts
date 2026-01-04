@@ -11,6 +11,7 @@ import path from "path"
 import { AppFileSystem } from "@opencode-ai/core/filesystem"
 import { Effect, Schema } from "effect"
 import type { InstanceContext } from "@/project/instance-context"
+import { Network } from "@/util/network"
 
 const decodeMessageInfo = Schema.decodeUnknownSync(MessageV2.Info)
 const decodePart = Schema.decodeUnknownSync(MessageV2.Part)
@@ -104,6 +105,12 @@ const runImport = Effect.fn("Cli.import.body")(function* (file: string, ctx: Ins
   const isUrl = file.startsWith("http://") || file.startsWith("https://")
 
   if (isUrl) {
+    if (Network.isOffline()) {
+      process.stdout.write("Cannot import from URL in offline mode. Use a local JSON file instead.")
+      process.stdout.write(EOL)
+      return
+    }
+
     const slug = parseShareUrl(file)
     if (!slug) {
       const baseUrl = yield* Effect.orDie(share.url())

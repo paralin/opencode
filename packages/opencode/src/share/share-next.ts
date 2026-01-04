@@ -14,6 +14,7 @@ import { Database } from "@/storage/db"
 import { eq } from "drizzle-orm"
 import { Config } from "@/config/config"
 import * as Log from "@opencode-ai/core/util/log"
+import { Network } from "@/util/network"
 import { SessionShareTable } from "./share.sql"
 
 const log = Log.create({ service: "share-next" })
@@ -123,6 +124,10 @@ export const layer = Layer.effect(
     function sync(sessionID: SessionID, data: Data[]): Effect.Effect<void> {
       return Effect.gen(function* () {
         if (disabled) return
+        if (Network.isOffline()) {
+          log.info("skipping share sync (offline mode)")
+          return
+        }
         const share = yield* getCached(sessionID)
         if (!share) return
 

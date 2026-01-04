@@ -131,6 +131,13 @@ const LogLevelRef = Schema.Literals(["DEBUG", "INFO", "WARN", "ERROR"]).annotate
   description: "Log level",
 })
 
+const NetworkConfig = Schema.Struct({
+  offline: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "Disable external network access except LLM provider APIs. Defaults to true, which disables sharing, auto-updates, LSP downloads, and models.dev sync.",
+  }),
+})
+
 export const Info = Schema.Struct({
   $schema: Schema.optional(Schema.String).annotate({
     description: "JSON schema reference for configuration validation",
@@ -141,6 +148,9 @@ export const Info = Schema.Struct({
   logLevel: Schema.optional(LogLevelRef).annotate({ description: "Log level" }),
   server: Schema.optional(ConfigServer.Server).annotate({
     description: "Server configuration for opencode serve and web commands",
+  }),
+  network: Schema.optional(NetworkConfig).annotate({
+    description: "Network configuration. By default, offline mode is enabled.",
   }),
   command: Schema.optional(Schema.Record(Schema.String, ConfigCommand.Info)).annotate({
     description: "Command configuration, see https://opencode.ai/docs/commands",

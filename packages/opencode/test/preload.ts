@@ -52,6 +52,11 @@ const cacheDir = path.join(dir, "cache", "opencode")
 await fs.mkdir(cacheDir, { recursive: true })
 await fs.writeFile(path.join(cacheDir, "version"), "14")
 
+// Import Network and set offline mode to false for tests
+// This allows tests to use the cached models.json file
+const { Network } = await import("../src/util/network")
+Network.setOffline(false)
+
 // Clear provider and server auth env vars to ensure clean test state
 delete process.env["ANTHROPIC_API_KEY"]
 delete process.env["OPENAI_API_KEY"]

@@ -13,6 +13,7 @@ import { Effect, Layer } from "effect"
 import { Config } from "@/config/config"
 import { Service } from "./bootstrap-service"
 import { Reference } from "@/reference/reference"
+import { Network } from "@/util/network"
 
 export { Service } from "./bootstrap-service"
 export type { Interface } from "./bootstrap-service"
@@ -39,7 +40,7 @@ export const layer = Layer.effect(
       const ctx = yield* InstanceState.context
       yield* Effect.logInfo("bootstrapping").pipe(Effect.annotateLogs("directory", ctx.directory))
       // everything depends on config so eager load it for nice traces
-      yield* config.get()
+      Network.setOffline((yield* config.get()).network?.offline ?? true)
       // Plugin can mutate config so it has to be initialized before anything else.
       yield* plugin.init()
       // Each service self-manages its own slow work via Effect.forkScoped against

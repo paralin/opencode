@@ -9,6 +9,7 @@ import path from "path"
 import { BusEvent } from "@/bus/bus-event"
 import * as Log from "@opencode-ai/core/util/log"
 import { makeRuntime } from "@opencode-ai/core/effect/runtime"
+import { Network } from "@/util/network"
 import semver from "semver"
 import { InstallationChannel, InstallationVersion } from "@opencode-ai/core/installation/version"
 import { NpmConfig } from "@opencode-ai/core/npm-config"
@@ -89,7 +90,10 @@ export interface Interface {
   readonly info: () => Effect.Effect<Info>
   readonly method: () => Effect.Effect<Method>
   readonly latest: (method?: Method) => Effect.Effect<string>
-  readonly upgrade: (method: Method, target: string) => Effect.Effect<void, UpgradeFailedError>
+  readonly upgrade: (
+    method: Method,
+    target: string,
+  ) => Effect.Effect<void, UpgradeFailedError | InstanceType<typeof Network.OfflineError>>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Installation") {}
@@ -212,6 +216,11 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
         return "unknown" as Method
       }),
       latest: Effect.fn("Installation.latest")(function* (installMethod?: Method) {
+        if (Network.isOffline()) {
+          log.info("skipping version check (offline mode)")
+          return InstallationVersion
+        }
+
         const detectedMethod = installMethod || (yield* result.method())
 
         if (detectedMethod === "brew") {
@@ -269,6 +278,13 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
         return data.tag_name.replace(/^v/, "")
       }, Effect.orDie),
       upgrade: Effect.fn("Installation.upgrade")(function* (m: Method, target: string) {
+        if (Network.isOffline()) {
+          return yield* new Network.OfflineError({
+            url: "https://opencode.ai/install",
+            feature: "auto-update",
+          })
+        }
+
         let upgradeResult: { code: number; stdout: string; stderr: string } | undefined
         switch (m) {
           case "curl":
