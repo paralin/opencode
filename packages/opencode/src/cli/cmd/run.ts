@@ -242,6 +242,10 @@ export const RunCommand = effectCmd({
         type: "boolean",
         default: false,
         describe: "enable direct interactive demo slash commands; pass one as the message to run it immediately",
+      })
+      .option("prompt-file", {
+        type: "string",
+        describe: "file to read message from",
       }),
   handler: Effect.fn("Cli.run")(function* (args) {
     const agentSvc = yield* Agent.Service
@@ -265,6 +269,7 @@ export const RunCommand = effectCmd({
       let message = [...args.message, ...(args["--"] || [])]
         .map((arg) => (arg.includes(" ") ? `"${arg.replace(/"/g, '\\"')}"` : arg))
         .join(" ")
+      let initialMessage = rawMessage
 
       if (args.interactive && args.command) {
         die("--interactive cannot be used with --command")
@@ -320,6 +325,18 @@ export const RunCommand = effectCmd({
           process.exit(1)
         }
       })()
+
+      if (args["prompt-file"]) {
+        const promptFile = Bun.file(path.resolve(args.attach ? root : (directory ?? root), args["prompt-file"]))
+        if (!(await promptFile.exists())) {
+          UI.error(`Prompt file not found: ${args["prompt-file"]}`)
+          process.exit(1)
+        }
+        const content = await promptFile.text()
+        message = message ? message + "\n" + content : content
+        initialMessage = initialMessage ? initialMessage + "\n" + content : content
+      }
+
       const attachHeaders = args.attach
         ? ServerAuth.headers({ password: args.password, username: args.username })
         : undefined
@@ -355,7 +372,7 @@ export const RunCommand = effectCmd({
 
       const piped = process.stdin.isTTY ? undefined : await Bun.stdin.text()
       message = resolveRunInput(message, piped) ?? ""
-      const initialInput = resolveRunInput(rawMessage, piped)
+      const initialInput = resolveRunInput(initialMessage, piped)
 
       if (message.trim().length === 0 && !args.command && !args.interactive) {
         UI.error("You must provide a message or a command")
