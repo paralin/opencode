@@ -87,6 +87,17 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
         providerOptions: input.provider.options,
       })
   const options = mergeOptions(mergeOptions(mergeOptions(base, input.model.options), input.agent.options), variant)
+  if (input.user.thinkingBudget !== undefined) {
+    const budget = input.user.thinkingBudget
+    if (input.model.api.npm === "@ai-sdk/github-copilot") {
+      options.thinking_budget = budget
+    } else if (
+      input.model.api.npm === "@ai-sdk/anthropic" ||
+      input.model.api.npm === "@ai-sdk/google-vertex/anthropic"
+    ) {
+      options.thinking = mergeDeep(options.thinking ?? {}, { budgetTokens: budget })
+    }
+  }
   if (isOpenaiOauth) options.instructions = system.join("\n")
 
   const messages =

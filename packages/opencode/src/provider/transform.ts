@@ -741,7 +741,14 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
         return {}
       }
       if (model.id.includes("claude")) {
-        return Object.fromEntries(WIDELY_SUPPORTED_EFFORTS.map((effort) => [effort, { reasoningEffort: effort }]))
+        // Copilot uses thinking_budget (integer tokens), not Anthropic's adaptive effort type.
+        // Map effort names to token budgets so users get the same variant interface.
+        return {
+          low: { thinking_budget: 1000 },
+          medium: { thinking_budget: 4000 },
+          high: { thinking_budget: 8000 },
+          max: { thinking_budget: 16000 },
+        }
       }
       const copilotEfforts = iife(() => {
         if (id.includes("5.1-codex-max") || id.includes("5.2") || id.includes("5.3"))

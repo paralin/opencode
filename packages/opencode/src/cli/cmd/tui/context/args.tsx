@@ -8,6 +8,8 @@ export interface Args {
   sessionID?: string
   fork?: boolean
   tools?: string
+  variant?: string
+  thinkingBudget?: number
 }
 
 export const { use: useArgs, provider: ArgsProvider } = createSimpleContext({

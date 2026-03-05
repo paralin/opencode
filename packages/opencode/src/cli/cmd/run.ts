@@ -168,6 +168,15 @@ export const RunCommand = effectCmd({
         alias: ["m"],
         describe: "model to use in the format of provider/model",
       })
+      .option("model-variant", {
+        type: "string",
+        alias: ["variant"],
+        describe: "model variant (e.g. low, medium, high, max)",
+      })
+      .option("model-variant-thinking-budget", {
+        type: "number",
+        describe: "override the thinking token budget for the selected variant",
+      })
       .option("agent", {
         type: "string",
         describe: "agent to use",
@@ -209,10 +218,6 @@ export const RunCommand = effectCmd({
       .option("port", {
         type: "number",
         describe: "port for the local server (defaults to random port if no value provided)",
-      })
-      .option("variant", {
-        type: "string",
-        describe: "model variant (provider-specific reasoning effort, e.g., high, max, minimal)",
       })
       .option("thinking", {
         type: "boolean",
@@ -800,7 +805,8 @@ export const RunCommand = effectCmd({
               model: args.model,
               command: args.command,
               arguments: message,
-              variant: args.variant,
+              variant: args.modelVariant,
+              thinkingBudget: args.modelVariantThinkingBudget,
             })
             if (result.error) {
               if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
@@ -814,7 +820,8 @@ export const RunCommand = effectCmd({
             sessionID,
             agent,
             model,
-            variant: args.variant,
+            variant: args.modelVariant,
+            thinkingBudget: args.modelVariantThinkingBudget,
             parts: [...files, { type: "text", text: message }],
           })
           if (result.error) {
@@ -837,7 +844,7 @@ export const RunCommand = effectCmd({
             replayLimit: args["replay-limit"],
             agent,
             model,
-            variant: args.variant,
+            variant: args.modelVariant,
             files,
             initialInput,
             createSession: createFreshSession,
@@ -869,7 +876,7 @@ export const RunCommand = effectCmd({
             createSession: createFreshSession,
             agent: args.agent,
             model,
-            variant: args.variant,
+            variant: args.modelVariant,
             replay,
             replayLimit: args["replay-limit"],
             files,

@@ -29,6 +29,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const sync = useSync()
     const sdk = useSDK()
     const toast = useToast()
+    const args = useArgs()
 
     function isModelValid(model: { providerID: string; modelID: string }) {
       const provider = sync.data.provider.find((x) => x.id === model.providerID)
@@ -159,7 +160,6 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           if (state.pending) save()
         })
 
-      const args = useArgs()
       const fallbackModel = createMemo(() => {
         if (args.model) {
           const { providerID, modelID } = parseModel(args.model)
@@ -497,6 +497,14 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         message: `Agent ${value.name}'s configured model ${value.model.providerID}/${value.model.modelID} is not valid`,
         duration: 3000,
       })
+    })
+
+    // Set initial variant from CLI args (once model store is ready)
+    createEffect(() => {
+      if (!model.ready) return
+      if (!args.variant) return
+      if (!model.current()) return
+      model.variant.set(args.variant)
     })
 
     const result = {

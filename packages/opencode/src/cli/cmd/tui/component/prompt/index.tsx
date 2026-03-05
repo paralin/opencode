@@ -1132,6 +1132,8 @@ export function Prompt(props: PromptProps) {
             },
           ]
         : []
+    const variant = local.model.variant.current()
+    const budget = args.thinkingBudget
 
     if (store.mode === "shell") {
       void sdk.client.session.shell({
@@ -1167,6 +1169,7 @@ export function Prompt(props: PromptProps) {
         model: `${selectedModel.providerID}/${selectedModel.modelID}`,
         messageID,
         variant,
+        thinkingBudget: budget,
         parts: nonTextParts
           .filter((x) => x.type === "file")
           .map((x) => ({
@@ -1184,6 +1187,7 @@ export function Prompt(props: PromptProps) {
           agent: agent.name,
           model: selectedModel,
           variant,
+          thinkingBudget: budget,
           ...(tools && { tools }),
           parts: [
             ...editorParts,

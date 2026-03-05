@@ -727,6 +727,7 @@ export const layer = Layer.effect(
         },
         system: input.system,
         format: input.format,
+        thinkingBudget: input.thinkingBudget,
       }
 
       if (current?.agent !== info.agent) {
@@ -1601,6 +1602,7 @@ export const layer = Layer.effect(
         agent: userAgent,
         parts,
         variant: input.variant,
+        thinkingBudget: input.thinkingBudget,
       })
       yield* bus.publish(Command.Event.Executed, {
         name: input.command,
@@ -1675,6 +1677,7 @@ export const PromptInput = Schema.Struct({
   format: Schema.optional(MessageV2.Format),
   system: Schema.optional(Schema.String),
   variant: Schema.optional(Schema.String),
+  thinkingBudget: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
   parts: Schema.Array(
     Schema.Union([
       MessageV2.TextPartInput,
@@ -1707,6 +1710,7 @@ export const CommandInput = Schema.Struct({
   arguments: Schema.String,
   command: Schema.String,
   variant: Schema.optional(Schema.String),
+  thinkingBudget: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
   // Inlined (no identifier annotation) to keep the original SDK output — the
   // PromptInput call site below references FilePartInput by ref via the
   // Schema export in message-v2.ts.
