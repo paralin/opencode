@@ -35,4 +35,18 @@ describe("Database.getChannelPath", () => {
       expect(Database.getChannelPath(flags)).toBe(Database.getChannelPath({ disableChannelDb: flags.disableChannelDb }))
     }).pipe(Effect.provide(RuntimeFlags.layer({ skipMigrations: true }))),
   )
+
+  it.effect("uses the selected file-backed database as the migration marker", () =>
+    Effect.sync(() => {
+      expect(Database.getMigrationMarkerPath(path.join(Global.Path.data, "opencode-local.db"))).toBe(
+        path.join(Global.Path.data, "opencode-local.db"),
+      )
+    }),
+  )
+
+  it.effect("falls back to the shared marker for in-memory databases", () =>
+    Effect.sync(() => {
+      expect(Database.getMigrationMarkerPath(":memory:")).toBe(path.join(Global.Path.data, "opencode.db"))
+    }),
+  )
 })

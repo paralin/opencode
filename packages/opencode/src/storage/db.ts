@@ -45,6 +45,11 @@ export const getPath = (flags?: Pick<DatabaseFlags, "disableChannelDb">) => {
 
 export type Transaction = SQLiteTransaction<"sync", void>
 
+export function getMigrationMarkerPath(file = getPath()) {
+  if (file === ":memory:") return path.join(Global.Path.data, "opencode.db")
+  return file
+}
+
 type Client = ReturnType<typeof init>
 
 type Journal = { sql: string; timestamp: number; name: string }[]
