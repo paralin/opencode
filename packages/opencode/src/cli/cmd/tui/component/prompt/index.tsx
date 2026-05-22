@@ -1132,7 +1132,6 @@ export function Prompt(props: PromptProps) {
             },
           ]
         : []
-    const variant = local.model.variant.current()
     const budget = args.thinkingBudget
 
     if (store.mode === "shell") {

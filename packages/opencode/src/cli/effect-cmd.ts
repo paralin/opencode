@@ -4,7 +4,7 @@ import { Effect, Schema } from "effect"
 import { AppRuntime, type AppServices } from "@/effect/app-runtime"
 import { InstanceStore } from "@/project/instance-store"
 import { InstanceRef } from "@/effect/instance-ref"
-import { Instance } from "@/project/instance"
+import { context as InstanceContext } from "@/project/instance-context"
 import { cmd, type WithDoubleDash } from "./cmd/cmd"
 
 /**
@@ -86,7 +86,7 @@ export const effectCmd = <Args, A>(opts: EffectCmdOpts<Args, A>) =>
       const directory =
         opts.directory?.(args) ??
         (typeof (args as { dir?: unknown }).dir === "string"
-          ? path.resolve((args as { dir: string }).dir)
+          ? path.resolve((args as unknown as { dir: string }).dir)
           : process.cwd())
       // Two-phase: load ctx, then run body inside Instance.current ALS.
       // Effect's InstanceRef is provided via fiber context, but that context is
@@ -98,7 +98,7 @@ export const effectCmd = <Args, A>(opts: EffectCmdOpts<Args, A>) =>
         InstanceStore.Service.use((store) => store.load({ directory }).pipe(Effect.map((ctx) => ({ store, ctx })))),
       )
       try {
-        await Instance.restore(ctx, () =>
+        await InstanceContext.provide(ctx, () =>
           AppRuntime.runPromise(opts.handler(args).pipe(Effect.provideService(InstanceRef, ctx))),
         )
       } finally {

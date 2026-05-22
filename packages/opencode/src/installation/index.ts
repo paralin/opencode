@@ -90,10 +90,7 @@ export interface Interface {
   readonly info: () => Effect.Effect<Info>
   readonly method: () => Effect.Effect<Method>
   readonly latest: (method?: Method) => Effect.Effect<string>
-  readonly upgrade: (
-    method: Method,
-    target: string,
-  ) => Effect.Effect<void, UpgradeFailedError | InstanceType<typeof Network.OfflineError>>
+  readonly upgrade: (method: Method, target: string) => Effect.Effect<void, UpgradeFailedError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Installation") {}
@@ -279,10 +276,7 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
       }, Effect.orDie),
       upgrade: Effect.fn("Installation.upgrade")(function* (m: Method, target: string) {
         if (Network.isOffline()) {
-          return yield* new Network.OfflineError({
-            url: "https://opencode.ai/install",
-            feature: "auto-update",
-          })
+          return yield* new UpgradeFailedError({ stderr: "auto-update is disabled in offline mode" })
         }
 
         let upgradeResult: { code: number; stdout: string; stderr: string } | undefined

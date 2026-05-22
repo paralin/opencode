@@ -281,8 +281,8 @@ export const SessionExportCommand = effectCmd({
     } else {
       content = formatTranscript(sessionInfo, sessionMessages, {
         thinking: args.thinking,
-        toolDetails: args.toolDetails,
-        assistantMetadata: args.assistantMetadata,
+        toolDetails: args["tool-details"],
+        assistantMetadata: args["assistant-metadata"],
       })
       defaultExtension = "md"
     }

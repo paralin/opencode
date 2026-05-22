@@ -805,8 +805,8 @@ export const RunCommand = effectCmd({
               model: args.model,
               command: args.command,
               arguments: message,
-              variant: args.modelVariant,
-              thinkingBudget: args.modelVariantThinkingBudget,
+              variant: args["model-variant"],
+              thinkingBudget: args["model-variant-thinking-budget"],
             })
             if (result.error) {
               if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
@@ -820,8 +820,8 @@ export const RunCommand = effectCmd({
             sessionID,
             agent,
             model,
-            variant: args.modelVariant,
-            thinkingBudget: args.modelVariantThinkingBudget,
+            variant: args["model-variant"],
+            thinkingBudget: args["model-variant-thinking-budget"],
             parts: [...files, { type: "text", text: message }],
           })
           if (result.error) {
@@ -844,7 +844,7 @@ export const RunCommand = effectCmd({
             replayLimit: args["replay-limit"],
             agent,
             model,
-            variant: args.modelVariant,
+            variant: args["model-variant"],
             files,
             initialInput,
             createSession: createFreshSession,
@@ -876,7 +876,7 @@ export const RunCommand = effectCmd({
             createSession: createFreshSession,
             agent: args.agent,
             model,
-            variant: args.modelVariant,
+            variant: args["model-variant"],
             replay,
             replayLimit: args["replay-limit"],
             files,

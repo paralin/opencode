@@ -346,7 +346,7 @@ export const User = Schema.Struct({
   }),
   system: Schema.optional(Schema.String),
   tools: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
-  thinkingBudget: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  thinkingBudget: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
 }).annotate({ identifier: "UserMessage" })
 export type User = Types.DeepMutable<Schema.Schema.Type<typeof User>>
 
